@@ -1,0 +1,1009 @@
+I"�}<h3 id="前言">前言</h3>
+<p>关于View的事件分发机制，网上已经有很多的资料，但是纸上得来终觉浅呀，所以自己动手理了一遍，并写下该文章作为记录。</p>
+
+<h3 id="背景知识">背景知识</h3>
+
+<ul>
+  <li>页面构成 <br />
+在 Android 系统中，一个页面一般用 Activity 类来实现。
+一个 Activity 会持有一个 PhoneWindow，而 PhoneWindow 有持有一个 DecorView，这个 DecorView 就是整个页面的根View了，DecorView 其实是一个 ViewGroup，其内部含有为 title 和 content 两个Layout区域；
+当我们调用 Activity 的 setContentView() 函数传进的 xml 布局文件，将会作为 DecorView 中的 content 区域的子 View 。<br />
+Activity 构成的一种案例：
+    <div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+</pre></td><td class="rouge-code"><pre><span class="err">第0层：DecorView</span>
+-第1层，第1个View：LinearLayout （screen_simple.xml）
+<span class="gd">--第2层，第1个View：ViewStub
+--第2层，第2个View：FrameLayout（装载 activity_my.xml 的父容器，id 为 content）
+---第3层，第1个View：LinearLayout（activity_my.xml ）
+----第4层，第1个View：TextView
+</span></pre></td></tr></tbody></table></code></pre></div>    </div>
+  </li>
+  <li>触摸事件分类<br />
+当我们在手机屏幕上进行点击，长按或者滑动等操作，对于 Android 系统来说，就是一次事件序列，该事件序列中含有三种事件类型：</li>
+  <li>Down</li>
+  <li>Move</li>
+  <li>
+    <p>Up
+这一次系列的事件序列，会从 Activity 传递到 DecorView，再传递给 DecorView 的各个子 View，直到找到处理事件的子View，称为 target。<br />
+从 Activity 到 DecorView 的传递的源码，可以参考该<a href="https://jsonchao.github.io/2018/10/17/Android触摸事件传递机制/">链接</a>。<br /></p>
+  </li>
+  <li>用伪代码来看整体逻辑
+引用<a href="https://www.jianshu.com/p/238d1b753e64">该链接</a>的伪代码来表示整体逻辑<br />
+ViewGroup#dispatchTouchEvent 的 伪代码：<br />
+    <div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+</pre></td><td class="rouge-code"><pre>// ViewGroup
+
+  public boolean dispatchTouchEvent(MotionEvent ev) {
+      boolean consume = false;// 事件是否被消费
+
+      if ( !onInterceptTouchEvent(ev) ){ // 判断是否拦截事件
+      //不拦截，调用子View的dispatchTouchEvent方法
+      for循环：consume = child.dispatchTouchEvent(ev);
+      }
+		
+  // 如果拦截，或者没有子 View 消费，consume 都为 false
+  // 此时会调用自身的 onTouchEvent 方法
+  if ( !consume ) onTouchEvent(ev); 
+
+  //返回值表示事件是否被消费，true 事件终止，false 则调用父 View 的 onTouchEvent方法
+      return consume;
+  }
+</pre></td></tr></tbody></table></code></pre></div>    </div>
+    <p>View#dispatchTouchEvent 的伪代码：<br /></p>
+    <div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+</pre></td><td class="rouge-code"><pre>// View
+
+  public boolean dispatchTouchEvent(MotionEvent ev) {
+      boolean consume = false;//事件是否被消费
+
+      if ( onTouch(ev) ) { //判断是否拦截事件
+      return true;
+      }
+		
+  if ( onTouchEvent(ev) ) { //判断是否拦截事件
+      return true;
+      }
+
+  //返回值表示事件是否被消费，true事件终止，false调用父View的onTouchEvent方法
+      return consume;
+  }
+</pre></td></tr></tbody></table></code></pre></div>    </div>
+  </li>
+</ul>
+
+<p>从该段伪代码中提取出：</p>
+<ul>
+  <li>ViewGroup#dispatchTouchEvent
+    <ul>
+      <li>
+        <ol>
+          <li>onInterceptTouchEvent 拦截判断</li>
+        </ol>
+      </li>
+      <li>
+        <ol>
+          <li>child.dispatchTouchEvent 分发子类
+            <ul>
+              <li>View#onTouch</li>
+              <li>View#onTouchEvent  – onClick</li>
+            </ul>
+          </li>
+        </ol>
+      </li>
+      <li>
+        <ol>
+          <li>onTouchEvent 自处理</li>
+        </ol>
+      </li>
+    </ul>
+  </li>
+</ul>
+
+<p>下面进入正题：
+事件的分发，从根 ViewGroup 开始看：</p>
+<h3 id="首先事件传到根-viewgroup-的分发函数-dispatchtouchevent判断是否拦截">首先，事件传到根 ViewGroup 的分发函数 dispatchTouchEvent，判断是否拦截</h3>
+<p>代码段一：</p>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39
+40
+41
+42
+43
+44
+45
+46
+47
+48
+49
+50
+51
+52
+53
+54
+55
+56
+</pre></td><td class="rouge-code"><pre>//  ViewGroup 类
+
+    @Override
+    public boolean dispatchTouchEvent(MotionEvent ev) {
+        boolean handled = false;
+        if (onFilterTouchEventForSecurity(ev)) {
+            final int action = ev.getAction();
+            final int actionMasked = action &amp; MotionEvent.ACTION_MASK;
+
+            // Handle an initial down.
+            if (actionMasked == MotionEvent.ACTION_DOWN) {
+                // Throw away all previous state when starting a new touch gesture.
+                // The framework may have dropped the up or cancel event for the previous gesture
+                // due to an app switch, ANR, or some other state change.
+                cancelAndClearTouchTargets(ev);// 置空 mFirstTouchTarget
+                resetTouchState();
+                // 重置 mGroupFlags：
+                // mGroupFlags &amp;= ~FLAG_DISALLOW_INTERCEPT;
+                // mGroupFlags 会与 FLAG_DISALLOW_INTERCEPT 做位运算
+            }
+
+            // Check for interception.
+            final boolean intercepted;
+            if (actionMasked == MotionEvent.ACTION_DOWN
+                    || mFirstTouchTarget != null) {
+                // 能进来这里，只有两种情况：
+                // down，mFirstTouchTarget 为空，刚刚被重置
+                // move/up，mFirstTouchTarget 不为空，有子 View 消费事件
+
+                final boolean disallowIntercept = (mGroupFlags &amp; FLAG_DISALLOW_INTERCEPT) != 0;// 1-1
+                // 当第一种情况：down时，上述 resetTouchState 函数重置 mGroupFlags，
+                // disallowIntercept 为 false，允许拦截，走下面的 onInterceptTouchEvent 函数判断是否拦截
+                // 当第二种情况：move/up时，若前一个事件传到子 View 时，调用 getParent().requestDisallowInterceptTouchEvent(true);
+                // 则后一个事件到此处，disallowIntercept 为 true，不允许拦截，不走 onInterceptTouchEvent 函数，直接放行
+                // 否则，disallowIntercept 为 false，允许拦截，走 onInterceptTouchEvent 函数判断是否拦截
+                // 本类此处代码往后，不会改动 mGroupFlags 中的 FLAG_DISALLOW_INTERCEPT 标志位，
+                // 所以只有子 View 会改动该标志位了。
+
+                if (!disallowIntercept) {
+                    // down 事件才会进这里
+                    intercepted = onInterceptTouchEvent(ev); // 1-2，默认返回false，不拦截
+                    ev.setAction(action); // restore action in case it was changed
+                } else {
+                    intercepted = false;
+                }
+            } else {
+                // There are no touch targets and this action is not an initial down
+                // so this view group continues to intercept touches.
+                intercepted = true;
+                // 之前的 down 事件，如果有子 View 处理，则已经赋值了 mFirstTouchTarget，使其不为空，
+                // 不会走这里；
+                // 若 move/up 走到这里的，则 mFirstTouchTarget 为空，没有子 View 处理事件
+                // 表示本 ViewGroup 继续处理此次 touch 事件。
+            }
+	
+	// 省略代码 ......
+</pre></td></tr></tbody></table></code></pre></div></div>
+<p>注意：<br />
+注释1-1处的 FLAG_DISALLOW_INTERCEPT 变量，子View 可以通过 requestDisallowInterceptTouchEvent 方法，设置该变量，干预 父ViewGroup 的事件分发过程（ACTION_DOWN事件除外），而这就是我们处理滑动冲突常用的关键方法</p>
+
+<p>代码段1.1：</p>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+</pre></td><td class="rouge-code"><pre>//  ViewGroup 类
+
+    /**
+     * Resets all touch state in preparation for a new cycle.
+     */
+    private void resetTouchState() {
+        clearTouchTargets();
+        resetCancelNextUpFlag(this);
+        mGroupFlags &amp;= ~FLAG_DISALLOW_INTERCEPT;
+        mNestedScrollAxes = SCROLL_AXIS_NONE;
+    }
+
+    @Override
+    public void requestDisallowInterceptTouchEvent(boolean disallowIntercept) {
+
+        if (disallowIntercept == ((mGroupFlags &amp; FLAG_DISALLOW_INTERCEPT) != 0)) {
+            // We're already in this state, assume our ancestors are too
+            return;
+        }
+
+        if (disallowIntercept) {
+            mGroupFlags |= FLAG_DISALLOW_INTERCEPT; 
+        } else {
+             // 重置，跟 resetTouchState 函数一致
+            mGroupFlags &amp;= ~FLAG_DISALLOW_INTERCEPT;
+        }
+
+        // Pass it up to our parent
+        if (mParent != null) {
+            mParent.requestDisallowInterceptTouchEvent(disallowIntercept);
+        }
+    }
+</pre></td></tr></tbody></table></code></pre></div></div>
+<p>mGroupFlags 变量是一个 int 值，其第 20 位是 0 或者 1，就代表着 disallowIntercept 变量位 false 或者 true，在代码中通过「&amp;」位运算来确认 ：disallowIntercept = (mGroupFlags &amp; FLAG_DISALLOW_INTERCEPT) != 0。重置则通过取反再「&amp;」位运来实现： mGroupFlags &amp;= ~FLAG_DISALLOW_INTERCEPT，这样 mGroupFlags 变量第 20 位会被置为 0。</p>
+
+<h5 id="第二步dispatchtouchevent-函数的剩余部分遍历子-view逐个分发">第二步，dispatchTouchEvent 函数的剩余部分，遍历子 View，逐个分发</h5>
+<p>代码段2：</p>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39
+40
+41
+42
+43
+44
+45
+46
+47
+48
+49
+50
+51
+52
+53
+54
+55
+56
+57
+58
+59
+60
+61
+62
+63
+64
+65
+66
+67
+68
+69
+70
+71
+72
+73
+74
+75
+76
+77
+78
+79
+80
+81
+82
+83
+84
+85
+86
+87
+88
+89
+90
+91
+92
+93
+94
+95
+96
+97
+98
+99
+100
+</pre></td><td class="rouge-code"><pre>    // ......
+
+    TouchTarget newTouchTarget = null;
+    boolean alreadyDispatchedToNewTouchTarget = false;
+	if (!canceled &amp;&amp; !intercepted) {
+
+        // ......
+
+        if (actionMasked == MotionEvent.ACTION_DOWN
+                || (split &amp;&amp; actionMasked == MotionEvent.ACTION_POINTER_DOWN)
+                || actionMasked == MotionEvent.ACTION_HOVER_MOVE) {
+            final int actionIndex = ev.getActionIndex(); // always 0 for down
+            final int idBitsToAssign = split ? 1 &lt;&lt; ev.getPointerId(actionIndex)
+                    : TouchTarget.ALL_POINTER_IDS;
+
+            // Clean up earlier touch targets for this pointer id in case they
+            // have become out of sync.
+            removePointersFromTouchTargets(idBitsToAssign);
+
+            final int childrenCount = mChildrenCount;
+            if (newTouchTarget == null &amp;&amp; childrenCount != 0) {
+                final float x = ev.getX(actionIndex);
+                final float y = ev.getY(actionIndex);
+                // Find a child that can receive the event.
+                // Scan children from front to back.
+                final ArrayList&lt;View&gt; preorderedList = buildTouchDispatchChildList();
+                final boolean customOrder = preorderedList == null
+                        &amp;&amp; isChildrenDrawingOrderEnabled();
+                final View[] children = mChildren;
+                // 2-1，倒序遍历，即从最外层的 View 往内层遍历
+                for (int i = childrenCount - 1; i &gt;= 0; i--) {
+                    final int childIndex = getAndVerifyPreorderedIndex(
+                            childrenCount, i, customOrder);
+                    final View child = getAndVerifyPreorderedView(
+                            preorderedList, children, childIndex);
+
+                    // 。。。
+
+                    if (!canViewReceivePointerEvents(child) // 2-2，触摸点是否在 View 的范围内，
+                            || !isTransformedTouchPointInView(x, y, child, null)) { // 该 View 是否在播放动画，均不符合，就下一个
+                        ev.setTargetAccessibilityFocus(false);
+                        continue;
+                    }
+
+                    // 2-3，逐个把事件传递给子 View，若其中某个子 View 返回 true，则说明处理了点击事件，进入处理后，break 掉循环
+                    if (dispatchTransformedTouchEvent(ev, false, child, idBitsToAssign)) {
+                        // Child wants to receive touch within its bounds.
+                        mLastTouchDownTime = ev.getDownTime();
+                        if (preorderedList != null) {
+                            // childIndex points into presorted list, find original index
+                            for (int j = 0; j &lt; childrenCount; j++) {
+                                if (children[childIndex] == mChildren[j]) {
+                                    mLastTouchDownIndex = j;
+                                    break;
+                                }
+                            }
+                        } else {
+                            mLastTouchDownIndex = childIndex;
+                        }
+                        mLastTouchDownX = ev.getX();
+                        mLastTouchDownY = ev.getY();
+                        // 2-4，记录处理事件的子 View ，
+		         // 在 addTouchTarget 函数内部，赋值 target 给 mFirstTouchTarget，并返回引用给 newTouchTarget
+                        newTouchTarget = addTouchTarget(child, idBitsToAssign);
+                        alreadyDispatchedToNewTouchTarget = true;
+                        break;
+                    }
+
+                    // The accessibility focus didn't handle the event, so clear
+                    // the flag and do a normal dispatch to all children.
+                    ev.setTargetAccessibilityFocus(false);
+                }
+                if (preorderedList != null) preorderedList.clear();
+            }
+
+            // 2-5，若没有找到子 View 处理事件，则指向最新添加的子 View
+            if (newTouchTarget == null &amp;&amp; mFirstTouchTarget != null) {
+                // Did not find a child to receive the event.
+                // Assign the pointer to the least recently added target.
+                newTouchTarget = mFirstTouchTarget;
+                while (newTouchTarget.next != null) {
+                    newTouchTarget = newTouchTarget.next;
+                }
+                newTouchTarget.pointerIdBits |= idBitsToAssign;
+            }
+        }
+    }
+    // 到此，分发事件给子View的工作结束了
+
+    // Dispatch to touch targets.
+    if (mFirstTouchTarget == null) {
+                // 2-6
+                // 没有子View处理事件
+                // No touch targets so treat this as an ordinary view.
+                // 注意传入的 child 参数为 null，内部会调用 super.dispatchTouchEvent(event);
+                // 即走 View#dispatchTouchEvent --&gt; onTouchEvent
+                handled = dispatchTransformedTouchEvent(ev, canceled, null,
+                        TouchTarget.ALL_POINTER_IDS);
+            }
+
+</pre></td></tr></tbody></table></code></pre></div></div>
+
+<p>先看注释2-4处的 addTouchTarget 函数：<br />
+<strong>如果找到了处理事件的子 View，将其引用赋值给 mFirstTouchTarget</strong><br />
+代码段2.1：</p>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+</pre></td><td class="rouge-code"><pre>    /**
+     * Adds a touch target for specified child to the beginning of the list.
+     * Assumes the target child is not already present.
+     */
+    private TouchTarget addTouchTarget(@NonNull View child, int pointerIdBits) {
+        final TouchTarget target = TouchTarget.obtain(child, pointerIdBits);
+        target.next = mFirstTouchTarget;
+        mFirstTouchTarget = target;
+        return target;
+    }
+</pre></td></tr></tbody></table></code></pre></div></div>
+
+<p>再看注释2-6处。</p>
+<h3 id="第三步没有子-view-消费事件走-dispatchtransformedtoucheven-函数">第三步，没有子 View 消费事件，走 dispatchTransformedTouchEven 函数</h3>
+<p>代码段3：</p>
+
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+</pre></td><td class="rouge-code"><pre>    private boolean dispatchTransformedTouchEvent(MotionEvent event, boolean cancel,
+            View child, int desiredPointerIdBits) {
+        final boolean handled;
+
+        // Canceling motions is a special case.  We don't need to perform any transformations
+        // or filtering.  The important part is the action, not the contents.
+        final int oldAction = event.getAction();
+        if (cancel || oldAction == MotionEvent.ACTION_CANCEL) {
+            event.setAction(MotionEvent.ACTION_CANCEL);
+            if (child == null) {
+		 // 3-1
+		 // 子类不存在，调用父类 View（注意不是父视图）的分发逻辑，如代 码段5 一致
+		 // ViewGroup 继承 View 类，所以也具有父类的特性
+                handled = super.dispatchTouchEvent(event);
+            } 
+            // 。。。
+
+            event.setAction(oldAction);
+            return handled;
+        }
+</pre></td></tr></tbody></table></code></pre></div></div>
+<p>注释3-1处，因为 child == null，走的是父类的 super.dispatchTouchEvent，也就是 View#dispatchTouchEvent，而 dispatchTouchEvent 函数最终会走到 View#onTouchEvent函数。也就是说，如果没有子 View 消费事件，就让本 ViewGroup 来决定是否消费事件。关于 dispatchTouchEvent 和 onTouchEvent 函数的实现，可接着往下看。</p>
+
+<p>再回看注释2-3处。</p>
+<h3 id="第四步dispatchtransformedtoucheven-函数另一个作用真正的分发事件给子-view">第四步，dispatchTransformedTouchEven 函数另一个作用，真正的分发事件给子 View</h3>
+<p>代码段4：</p>
+
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+</pre></td><td class="rouge-code"><pre>    private boolean dispatchTransformedTouchEvent(MotionEvent event, boolean cancel,
+            View child, int desiredPointerIdBits) {
+        final boolean handled;
+
+        // Canceling motions is a special case.  We don't need to perform any transformations
+        // or filtering.  The important part is the action, not the contents.
+        final int oldAction = event.getAction();
+        if (cancel || oldAction == MotionEvent.ACTION_CANCEL) {
+            event.setAction(MotionEvent.ACTION_CANCEL);
+            if (child == null) {
+		 // 子类不存在，调用父类 View（注意不是父视图）的分发逻辑，如代 码段5 一致
+		 // ViewGroup 继承 View 类，所以也具有父类的特性
+                handled = super.dispatchTouchEvent(event);
+            } else {
+		 // 4-1，子类存在，调用子类的 dispatchTouchEvent 分发函数
+                handled = child.dispatchTouchEvent(event);
+            }
+            event.setAction(oldAction);
+            return handled;
+        }
+</pre></td></tr></tbody></table></code></pre></div></div>
+
+<p>接着注释4-1处。</p>
+<h3 id="第五步事件传递到子-view-的分发函数-dispatchtouchevent">第五步，事件传递到子 View 的分发函数 dispatchTouchEvent</h3>
+<p>代码段5：</p>
+
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+</pre></td><td class="rouge-code"><pre>    /**
+     * Pass the touch screen motion event down to the target view, or this
+     * view if it is the target.
+     *
+     * @param event The motion event to be dispatched.
+     * @return True if the event was handled by the view, false otherwise.
+     */
+    public boolean dispatchTouchEvent(MotionEvent event) {
+	// 。。。
+
+        if (onFilterTouchEventForSecurity(event)) {
+            if ((mViewFlags &amp; ENABLED_MASK) == ENABLED &amp;&amp; handleScrollBarDragging(event)) {
+                result = true;
+            }
+            //noinspection SimplifiableIfStatement
+            ListenerInfo li = mListenerInfo;
+            if (li != null &amp;&amp; li.mOnTouchListener != null
+                    &amp;&amp; (mViewFlags &amp; ENABLED_MASK) == ENABLED
+                    &amp;&amp; li.mOnTouchListener.onTouch(this, event)) { // 5-1，优先 onTouch 函数
+                result = true;
+            }
+
+            if (!result &amp;&amp; onTouchEvent(event)) { // 5-2，其次 onTouchEvent 函数
+                result = true;
+            }
+        }
+
+	// 。。。
+        return result;
+    }
+</pre></td></tr></tbody></table></code></pre></div></div>
+
+<p>接着注释5-2处。</p>
+<h5 id="第六步事件传递到子-view-的-ontouchevent-函数">第六步：事件传递到子 View 的 onTouchEvent 函数</h5>
+<p>代码段6：</p>
+
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39
+40
+41
+42
+43
+44
+45
+46
+47
+48
+49
+50
+51
+52
+53
+54
+</pre></td><td class="rouge-code"><pre>    public boolean onTouchEvent(MotionEvent event) {
+        final float x = event.getX();
+        final float y = event.getY();
+        final int viewFlags = mViewFlags;
+        final int action = event.getAction();
+	   // 6-1，只要设置点击或长按监听的其中一个，就会处理事件并返回 true
+        final boolean clickable = ((viewFlags &amp; CLICKABLE) == CLICKABLE
+                || (viewFlags &amp; LONG_CLICKABLE) == LONG_CLICKABLE)
+                || (viewFlags &amp; CONTEXT_CLICKABLE) == CONTEXT_CLICKABLE;
+
+	  // 。。。
+
+        if (clickable || (viewFlags &amp; TOOLTIP) == TOOLTIP) {
+            switch (action) {
+                case MotionEvent.ACTION_UP:
+		     // 。。。
+                        if (!mHasPerformedLongPress &amp;&amp; !mIgnoreNextUpEvent) {
+                            // This is a tap, so remove the longpress check
+                            removeLongPressCallback();
+
+                            // Only perform take click actions if we were in the pressed state
+                            if (!focusTaken) {
+                                // Use a Runnable and post this rather than calling
+                                // performClick directly. This lets other visual state
+                                // of the view update before click actions start.
+                                if (mPerformClick == null) {
+                                    mPerformClick = new PerformClick();
+                                }
+                                if (!post(mPerformClick)) {
+                                    performClickInternal(); // 6-2 Up 事件时，执行处理点击的逻辑
+                                }
+                            }
+                        }
+
+		     // 。。。
+                    break;
+
+                case MotionEvent.ACTION_DOWN:
+		     // 。。。
+                    break;
+
+                case MotionEvent.ACTION_CANCEL:
+		     // 。。。
+                    break;
+
+                case MotionEvent.ACTION_MOVE:
+		     // 。。。
+                    break;
+            }
+
+            return true;
+        }
+
+        return false;
+</pre></td></tr></tbody></table></code></pre></div></div>
+
+<p>接着注释6-2，</p>
+<h5 id="第七步performclickinternal-函数处理点击的逻辑">第七步，performClickInternal 函数处理点击的逻辑</h5>
+
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+</pre></td><td class="rouge-code"><pre>    private boolean performClickInternal() {
+        // Must notify autofill manager before performing the click actions to avoid scenarios where
+        // the app has a click listener that changes the state of views the autofill service might
+        // be interested on.
+        notifyAutofillManagerOnClick();
+
+        return performClick();// 接着这看
+    }
+</pre></td></tr></tbody></table></code></pre></div></div>
+
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+</pre></td><td class="rouge-code"><pre>    public boolean performClick() {
+        // We still need to call this method to handle the cases where performClick() was called
+        // externally, instead of through performClickInternal()
+        notifyAutofillManagerOnClick();
+
+        final boolean result;
+        final ListenerInfo li = mListenerInfo;
+        if (li != null &amp;&amp; li.mOnClickListener != null) {
+            playSoundEffect(SoundEffectConstants.CLICK);
+            li.mOnClickListener.onClick(this); // 7-1，回调
+            result = true;
+        } else {
+            result = false;
+        }
+
+        sendAccessibilityEvent(AccessibilityEvent.TYPE_VIEW_CLICKED);
+
+        notifyEnterOrExitForAutoFillIfNeeded(true);
+
+        return result;
+    }
+</pre></td></tr></tbody></table></code></pre></div></div>
+
+<p>注释7-1处，执行了 mOnClickListener 的 onClick 函数，<br />
+就是通过 View 的函数 setOnClickListener 设置进来的，详情：</p>
+
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+</pre></td><td class="rouge-code"><pre>    public void setOnClickListener(@Nullable OnClickListener l) {
+        if (!isClickable()) {
+            setClickable(true);
+        }
+        getListenerInfo().mOnClickListener = l;
+    }
+</pre></td></tr></tbody></table></code></pre></div></div>
+
+<p>到此，基本流程就走完了。<br /></p>
+
+<ul>
+  <li>流程图：
+我自己画的流程图有点丑，这里先去<a href="https://jsonchao.github.io/2018/10/17/Android触摸事件传递机制/">该链接</a>的文章看里面的流程图，画得非常好，值得学习！
+<br /></li>
+</ul>
+
+<h1 id="小结一下">小结一下</h1>
+
+<h4 id="viewgroup--dispatchtouchevent-函数的步骤细节">ViewGroup # dispatchTouchEvent 函数的步骤细节</h4>
+
+<ul>
+  <li>1⃣️ 重置：down 事件？
+    <ul>
+      <li>重置 目标子View，mFirstTouchTarget == null</li>
+      <li>重置 不拦截flag，mGroupFlags &amp;= ~FLAG_DISALLOW_INTERCEPT</li>
+    </ul>
+  </li>
+  <li>2⃣️ 拦截判断，条件一：down 事件？
+    <ul>
+      <li>disallowIntercept 重置为 false，走 4⃣️ intercepted = onInterceptTouchEvent(ev)，默认返回 false</li>
+    </ul>
+  </li>
+  <li>3⃣️ 拦截判断，条件二：move/up事件，有目标子View
+    <ul>
+      <li>disallowIntercept 在 down 事件时重置为 false，走 4⃣️ intercepted = onInterceptTouchEvent(ev)，默认返回 false</li>
+      <li>若上一个事件传到目标子View时，子View 调用getParent().requestDisallowInterceptTouchEvent(true)，将 disallowIntercept置为 true，走 5⃣️ intercepted = false</li>
+    </ul>
+  </li>
+  <li>6⃣️ 分发：intercepted == false
+    <ul>
+      <li>落点判断：若在落点内，则分发</li>
+      <li>分发事件给子View，child.dispatchTouchEvent</li>
+      <li>若返回 true，则将该 child 记录为 目标子View</li>
+    </ul>
+  </li>
+  <li>7⃣️ 自消化：没有目标子View，mFirstTouchTarget == null
+    <ul>
+      <li>dispatchTransformedTouchEvent(ev, canceled, null, … ) 第三个参数 child 为 null
+        <ul>
+          <li>if(child == null)  super.dispatchTouchEvent –&gt; View#dispatchTouchEvent –&gt; View#onTouchEvent</li>
+          <li>即走 onTouchEvent 函数来确定自身是否消化这个事件</li>
+        </ul>
+      </li>
+    </ul>
+  </li>
+</ul>
+
+<h4 id="一次事件序列在-viewgroupdispatchtouchevent-函数的过程-">一次事件序列在 ViewGroup#dispatchTouchEvent 函数的过程 <br /></h4>
+<p>| 事件  | 步骤  | 备注  |
+|:———-|:———-:|:———-|
+| down    | 1⃣️ 2⃣️ 4⃣️ 6⃣️    |  记录消费事件的目标子View    |
+| move    | 3⃣️ 4⃣️ 6⃣️     |     |
+|  …    | 3⃣️ 4⃣️ 6⃣️     |     |
+| move    | 3⃣️ 4⃣️ 6⃣️     |  目标子View中，请求不拦截   |
+| move    | 3⃣️ 5⃣️ 6⃣️     |   之后都不走步骤4⃣️，走步骤5⃣️ intercepted = false ，直接不拦截  |
+| …    | 3⃣️ 5⃣️ 6⃣️     |     |
+| up    | 3⃣️ 5⃣️ 6⃣️     |     |</p>
+
+<p><br /></p>
+<ul>
+  <li>若该 ViewGroup 没有子View，且被触摸点命中 ，则过程步骤如下：
+| 事件  | 步骤  | 备注  |
+|:———-|:———-:|:———-|
+| down    | 1⃣️ 2⃣️ 4⃣️ 6⃣️ 7⃣️    |  没有目标子View，走 onTouchEvent 函数 ，若返回 false，不处理事件，则该ViewGroup自身不会被加入到父容器的 mFirstTouchTarget 中，后续的  move/up 事件，都会直接走7⃣️，返回 false，把事件返回父容器处理  |
+| move    | 7⃣️     |     |
+|  …    | 7⃣️     |     |
+| up    | 7⃣️     |     |</li>
+</ul>
+
+<h4 id="view--dispatchtouchevent-函数的大致步骤">View # dispatchTouchEvent 函数的大致步骤</h4>
+<ul>
+  <li>onTouch 函数处理
+    <ul>
+      <li>返回 true，函数结束</li>
+    </ul>
+  </li>
+  <li>onTouchEvent 函数处理
+    <ul>
+      <li>设置了点击或长按的监听，处理事件并返回 true，函数结束
+        <ul>
+          <li>case MotionEvent.ACTION_UP：performClickInternal</li>
+          <li>case MotionEvent.ACTION_DOWN：checkForLongClick – CheckForLongPress#run – performLongClick</li>
+          <li>返回 true</li>
+        </ul>
+      </li>
+    </ul>
+  </li>
+</ul>
+
+<p><br /></p>
+<ul>
+  <li>参考的链接：<br />
+<a href="https://jsonchao.github.io/2018/10/17/Android触摸事件传递机制/">文章一，简明精确</a><br />
+<a href="https://www.jianshu.com/p/238d1b753e64">文章二，详细中带皮</a><br />
+<a href="https://www.jianshu.com/p/fc0590afb1bf">文章三，从Demo的角度</a>
+<a href="https://blog.csdn.net/carson_ho/article/details/54136311">文章四，表格和流程图很清晰，水平远超我的一篇：Android事件分发机制 详解攻略，您值得拥有</a></li>
+</ul>
+:ET

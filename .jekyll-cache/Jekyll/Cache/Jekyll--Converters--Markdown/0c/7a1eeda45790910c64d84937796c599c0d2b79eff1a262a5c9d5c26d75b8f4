@@ -1,0 +1,291 @@
+I"�(<h1 id="从一个简单例子开始">从一个简单例子开始</h1>
+<p>假设有一个 MyActivity extends Activity，
+设置了布局 setContentView( R.layout.activity_my ); 
+activity_my.xml 的源码如下：  <br />
+<br /></p>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+</pre></td><td class="rouge-code"><pre><span class="cp">&lt;?xml version="1.0" encoding="utf-8"?&gt;</span>
+<span class="nt">&lt;LinearLayout</span> <span class="na">xmlns:android=</span><span class="s">"http://schemas.android.com/apk/res/android"</span>
+    <span class="na">xmlns:app=</span><span class="s">"http://schemas.android.com/apk/res-auto"</span>
+    <span class="na">xmlns:tools=</span><span class="s">"http://schemas.android.com/tools"</span>
+    <span class="na">android:layout_width=</span><span class="s">"match_parent"</span>
+    <span class="na">android:layout_height=</span><span class="s">"match_parent"</span>
+    <span class="na">android:orientation=</span><span class="s">"vertical"</span>
+    <span class="na">tools:context=</span><span class="s">".viewtest.MyActivity"</span><span class="nt">&gt;</span>
+    
+    <span class="nt">&lt;TextView</span>
+        <span class="na">android:layout_width=</span><span class="s">"wrap_content"</span>
+        <span class="na">android:layout_height=</span><span class="s">"wrap_content"</span> 
+        <span class="na">android:text=</span><span class="s">"MyActivity"</span><span class="nt">/&gt;</span>
+
+<span class="nt">&lt;/LinearLayout&gt;</span>
+</pre></td></tr></tbody></table></code></pre></div></div>
+
+<p>已知一个 Activity 的根视图是 DecorView，那么 DecorView 内的视图结构是怎样的呢？</p>
+
+<p>先说结论，结构如下：</p>
+
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+</pre></td><td class="rouge-code"><pre><span class="err">第0层：DecorView</span>
+-第1层，第1个View：LinearLayout （screen_simple.xml）
+<span class="gd">--第2层，第1个View：ViewStub
+--第2层，第2个View：FrameLayout（装载 activity_my.xml 的父容器，id 为 content）
+---第3层，第1个View：LinearLayout（activity_my.xml）
+----第4层，第1个View：TextView
+</span></pre></td></tr></tbody></table></code></pre></div></div>
+<p>其中，第3层的 LinearLayout，就是 activity_my.xml 的根视图；
+第4层的 TextView，就是 TextView(“MyActivity”)
+<br />
+而第1层和第2层的视图，
+对应 R.layout.screen_simple 即 screen_simple.xml 布局文件，位于：源码工程/framework/base/core/res/layout/，<br />
+一个以 LinearLayout 为根的视图，带有两个子视图：ViewStub，FrameLayout。<br /></p>
+
+<p>可以在此处源码找到答案：</p>
+
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39
+40
+41
+42
+43
+44
+45
+46
+47
+48
+49
+50
+51
+</pre></td><td class="rouge-code"><pre>// PhoneWinow 类
+ protected ViewGroup generateLayout(DecorView decor) {
+
+	//  。。。 省略
+       
+        // Inflate the window decor.
+
+        int layoutResource;
+        int features = getLocalFeatures();
+
+	// 加载布局，根据 features 来判断
+        if ((features &amp; (1 &lt;&lt; FEATURE_SWIPE_TO_DISMISS)) != 0) {
+            layoutResource = R.layout.screen_swipe_dismiss;
+            setCloseOnSwipeEnabled(true);
+        } else if ((features &amp; ((1 &lt;&lt; FEATURE_LEFT_ICON) | (1 &lt;&lt; FEATURE_RIGHT_ICON))) != 0) {
+		 //  。。。 省略 
+        } else if ((features &amp; ((1 &lt;&lt; FEATURE_PROGRESS) | (1 &lt;&lt; FEATURE_INDETERMINATE_PROGRESS))) != 0
+                &amp;&amp; (features &amp; (1 &lt;&lt; FEATURE_ACTION_BAR)) == 0) {
+		 //  。。。 省略
+        } else if ((features &amp; (1 &lt;&lt; FEATURE_CUSTOM_TITLE)) != 0) {
+            // Special case for a window with a custom title.
+            // If the window is floating, we need a dialog layout
+		 //  。。。 省略
+        } else if ((features &amp; (1 &lt;&lt; FEATURE_NO_TITLE)) == 0) {
+            // If no other features and not embedded, only need a title.
+            // If the window is floating, we need a dialog layout
+            if (mIsFloating) {
+		 //  。。。 省略
+            } else {
+                layoutResource = R.layout.screen_title;
+            }
+            // System.out.println("Title!");
+        } else if ((features &amp; (1 &lt;&lt; FEATURE_ACTION_MODE_OVERLAY)) != 0) {
+            layoutResource = R.layout.screen_simple_overlay_action_mode;
+        } else {
+            // Embedded, so no decoration is needed.
+            layoutResource = R.layout.screen_simple;
+            // System.out.println("Simple!");
+        }
+
+        mDecor.onResourcesLoaded(mLayoutInflater, layoutResource);
+
+	ViewGroup contentParent = (ViewGroup)findViewById(ID_ANDROID_CONTENT);
+        if (contentParent == null) {
+            throw new RuntimeException("Window couldn't find content container view");
+        }
+
+	//  。。。 省略
+
+	return contentParent;
+    }
+</pre></td></tr></tbody></table></code></pre></div></div>
+<p>上述加载的布局文件都是系统内置的，常用的布局文件是这两个：
+R.layout.screen_title 和 R.layout.screen_simple，都位于 framework/base/core/res/layout/
+<br />
+R.layout.screen_simple 的源码：
+<br /></p>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+</pre></td><td class="rouge-code"><pre>&lt;LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fitsSystemWindows="true"
+    android:orientation="vertical"&gt;
+    &lt;ViewStub android:id="@+id/action_mode_bar_stub"
+              android:inflatedId="@+id/action_mode_bar"
+              android:layout="@layout/action_mode_bar"
+              android:layout_width="match_parent"
+              android:layout_height="wrap_content" /&gt;
+    &lt;FrameLayout
+         android:id="@android:id/content"
+         android:layout_width="match_parent"
+         android:layout_height="match_parent"
+         android:foregroundInsidePadding="false"
+         android:foregroundGravity="fill_horizontal|top"
+         android:foreground="?android:attr/windowContentOverlay" /&gt;
+&lt;/LinearLayout&gt;
+</pre></td></tr></tbody></table></code></pre></div></div>
+<p>一个 LinearLayout 的根视图，带有两个子视图：ViewStub，FrameLayout。
+而 FrameLayout 就是 装载 activity_my.xml 的父容器，id 为 content，
+其引用由 PhoneWinow#generateLayout 函数创建并返回给变量 mContentParent，
+并通过 PhoneWinow#setContent 函数中的语句 ：</p>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+</pre></td><td class="rouge-code"><pre>	mLayoutInflater.inflate(layoutResID, mContentParent); 
+</pre></td></tr></tbody></table></code></pre></div></div>
+<p>把上述的 activity_my.xml  设置给 mContentParent。</p>
+
+<p><br />
+接下来理一下，从 Activity 的 setContentView 函数，是如何构建 DecorView 和其子视图的。</p>
+<h1 id="创建-decorview-的调用链">创建 DecorView 的调用链</h1>
+
+<ul>
+  <li>Activity#setContentView
+    <div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+</pre></td><td class="rouge-code"><pre>  getWindow().setContentView(layoutResID);
+</pre></td></tr></tbody></table></code></pre></div>    </div>
+  </li>
+  <li>PhoneWinow#setContent
+    <div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+</pre></td><td class="rouge-code"><pre>      if (mContentParent == null) {
+          installDecor();
+
+  if (hasFeature(FEATURE_CONTENT_TRANSITIONS)) {
+      // 。。。
+      } else {
+          mLayoutInflater.inflate(layoutResID, mContentParent);
+      }
+</pre></td></tr></tbody></table></code></pre></div>    </div>
+  </li>
+  <li>PhoneWinow#installDecor
+    <div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+</pre></td><td class="rouge-code"><pre>      if (mDecor == null) {
+      // 生成 DecorView
+          mDecor = generateDecor(-1);
+
+  // 。。。
+
+      if (mContentParent == null) {
+          // R.layout.screen_simple 设置为 mDecor
+      // id 为 content 的视图引用交给 mContentParent
+          mContentParent = generateLayout(mDecor);
+</pre></td></tr></tbody></table></code></pre></div>    </div>
+  </li>
+  <li>PhoneWinow#generateDecor ( return new DecorView )
+    <div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+</pre></td><td class="rouge-code"><pre>  return new DecorView(context, featureId, this, getAttributes());
+</pre></td></tr></tbody></table></code></pre></div>    </div>
+  </li>
+  <li>PhoneWinow#generateLayout
+    <div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+</pre></td><td class="rouge-code"><pre>  layoutResource = R.layout.screen_simple;
+  mDecor.onResourcesLoaded(mLayoutInflater, layoutResource);
+  ViewGroup contentParent = (ViewGroup)findViewById(ID_ANDROID_CONTENT);
+  return contentParent;
+</pre></td></tr></tbody></table></code></pre></div>    </div>
+  </li>
+</ul>
+
+<p>详细的讲解，参考：
+<a href="https://blog.csdn.net/nihaomabmt/article/details/85248700">该文章，对 DecorView 区域划分有讲解的</a></p>
+
+:ET

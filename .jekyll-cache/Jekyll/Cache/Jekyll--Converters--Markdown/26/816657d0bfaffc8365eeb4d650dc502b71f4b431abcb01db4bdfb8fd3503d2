@@ -1,0 +1,1489 @@
+I"��<h1 id="前言">前言</h1>
+<p>9月初写的这篇文章：<a href="https://guoke24.top/2019/09/02/V2加签/">源码看 Android V2 签名之加签篇</a>，从源码的角度解析了加签的过程，同时也了解了签名 APK 的结构，
+如下图：
+<img src="http://guoke24.top/img/apk-before-after-signing.png" alt="" /><br /></p>
+
+<p>还有签名块的结构，用类json格式的代码表示如下：</p>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+</pre></td><td class="rouge-code"><pre>apk
+{
+    beforeCentralDir,
+    apkSigningBlock,// apk 签名分块
+		{
+		    blockSizeFieldValue,
+		    pairSizeFieldValue,
+		    APK_SIGNATURE_SCHEME_V2_BLOCK_ID,
+		    apkSignatureSchemeV2Block，// value 值，内含 “ID-值”对，V2 分块
+		    blockSizeFieldValue,
+		    APK_SIGNING_BLOCK_MAGIC,
+		}
+    centralDir,
+    eocd,
+}
+</pre></td></tr></tbody></table></code></pre></div></div>
+<p>再来一张表格图示：<br />
+<img src="http://guoke24.top/img/v2签名块表格图示.png" alt="" /><br /></p>
+
+<h1 id="v2-验签的源码入口">V2 验签的源码入口</h1>
+
+<p>接着看源码，验签的代码都是在 framework/base 内的，可以通过该命令下载 framework/base （可能需科学上网）：</p>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+</pre></td><td class="rouge-code"><pre>git clone https://android.googlesource.com/platform/frameworks/base
+
+</pre></td></tr></tbody></table></code></pre></div></div>
+<p>也可以去网上浏览（可能需科学上网），直接<a href="https://android.googlesource.com/platform/frameworks/base">点击该链接</a>；</p>
+
+<p>我们先找 V2 验签的函数入口，这是在安装 APK 的调用链中的一个分支，定义在该文件：
+/frameworks/base/services/core/java/com/android/server/pm/PackageManagerService.java<br />
+代码段1:</p>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+</pre></td><td class="rouge-code"><pre>    private void installPackageLI(InstallArgs args, PackageInstalledInfo res) {
+......
+        try {
+            // either use what we've been given or parse directly from the APK
+            if (args.signingDetails != PackageParser.SigningDetails.UNKNOWN) {
+                pkg.setSigningDetails(args.signingDetails);
+            } else {
+                // 1-1
+                PackageParser.collectCertificates(pkg, false /* skipVerify */);
+            }
+        } catch (PackageParserException e) {
+            res.setError("Failed collect during installPackageLI", e);
+            return;
+        }
+......
+    }
+</pre></td></tr></tbody></table></code></pre></div></div>
+
+<p>接着在注释1-1处，执行 PackageParser 类的 collectCertificates 函数，<br />
+进入文件：<br />
+/frameworks/base/core/java/android/content/pm/PackageParser.java<br />
+代码段2:</p>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39
+40
+41
+42
+43
+44
+45
+46
+47
+48
+49
+50
+51
+52
+53
+54
+55
+56
+57
+58
+59
+60
+61
+62
+63
+64
+65
+66
+67
+68
+69
+70
+71
+</pre></td><td class="rouge-code"><pre>    /**
+     * Collect certificates from all the APKs described in the given package,
+     * populating {@link Package#mSigningDetails}. Also asserts that all APK
+     * contents are signed correctly and consistently.
+     */
+    public static void collectCertificates(Package pkg, boolean skipVerify)
+            throws PackageParserException {
+        // 2-1 接着下一步
+        collectCertificatesInternal(pkg, skipVerify);
+        final int childCount = (pkg.childPackages != null) ? pkg.childPackages.size() : 0;
+        for (int i = 0; i &lt; childCount; i++) {
+            Package childPkg = pkg.childPackages.get(i);
+            childPkg.mSigningDetails = pkg.mSigningDetails;
+        }
+    }
+
+
+
+    private static void collectCertificatesInternal(Package pkg, boolean skipVerify)
+            throws PackageParserException {
+        pkg.mSigningDetails = SigningDetails.UNKNOWN;
+
+        Trace.traceBegin(TRACE_TAG_PACKAGE_MANAGER, "collectCertificates");
+        try {
+            // 2-2 接着下一步
+            collectCertificates(pkg, new File(pkg.baseCodePath), skipVerify);
+
+            if (!ArrayUtils.isEmpty(pkg.splitCodePaths)) {
+                for (int i = 0; i &lt; pkg.splitCodePaths.length; i++) {
+                    collectCertificates(pkg, new File(pkg.splitCodePaths[i]), skipVerify);
+                }
+            }
+        } finally {
+            Trace.traceEnd(TRACE_TAG_PACKAGE_MANAGER);
+        }
+    }
+
+
+
+    private static void collectCertificates(Package pkg, File apkFile, boolean skipVerify)
+            throws PackageParserException {
+        final String apkPath = apkFile.getAbsolutePath();
+
+        int minSignatureScheme = SigningDetails.SignatureSchemeVersion.JAR;
+        if (pkg.applicationInfo.isStaticSharedLibrary()) {
+            // must use v2 signing scheme
+            minSignatureScheme = SigningDetails.SignatureSchemeVersion.SIGNING_BLOCK_V2;
+        }
+        SigningDetails verified;
+        if (skipVerify) {
+            // systemDir APKs are already trusted, save time by not verifying
+            verified = ApkSignatureVerifier.plsCertsNoVerifyOnlyCerts(
+                        apkPath, minSignatureScheme);
+        } else {
+            // 2-3 APK 的验签入口
+            verified = ApkSignatureVerifier.verify(apkPath, minSignatureScheme);
+        }
+
+        // Verify that entries are signed consistently with the first pkg
+        // we encountered. Note that for splits, certificates may have
+        // already been populated during an earlier parse of a base APK.
+        if (pkg.mSigningDetails == SigningDetails.UNKNOWN) {
+            pkg.mSigningDetails = verified;
+        } else {
+            if (!Signature.areExactMatch(pkg.mSigningDetails.signatures, verified.signatures)) {
+                throw new PackageParserException(
+                        INSTALL_PARSE_FAILED_INCONSISTENT_CERTIFICATES,
+                        apkPath + " has mismatched certificates");
+            }
+        }
+    }
+</pre></td></tr></tbody></table></code></pre></div></div>
+
+<p>注释2-3处，是 APK 的验签入口，接着来到文件：
+/frameworks/base/core/java/android/util/apk/ApkSignatureVerifier.java<br />
+代码段3:</p>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39
+40
+41
+42
+43
+44
+45
+46
+47
+48
+49
+50
+51
+52
+53
+54
+55
+56
+57
+58
+59
+60
+61
+62
+63
+64
+65
+66
+67
+68
+</pre></td><td class="rouge-code"><pre>    /**
+     * Verifies the provided APK and returns the certificates associated with each signer.
+     *
+     * @throws PackageParserException if the APK's signature failed to verify.
+     */
+    public static PackageParser.SigningDetails verify(String apkPath,
+            @SignatureSchemeVersion int minSignatureSchemeVersion)
+            throws PackageParserException {
+
+        if (minSignatureSchemeVersion &gt; SignatureSchemeVersion.SIGNING_BLOCK_V3) {
+            // V3 and before are older than the requested minimum signing version
+            throw new PackageParserException(INSTALL_PARSE_FAILED_NO_CERTIFICATES,
+                    "No signature found in package of version " + minSignatureSchemeVersion
+            + " or newer for package " + apkPath);
+        }
+
+        // first try v3
+        Trace.traceBegin(TRACE_TAG_PACKAGE_MANAGER, "verifyV3");
+        try {
+            ApkSignatureSchemeV3Verifier.VerifiedSigner vSigner =
+                    ApkSignatureSchemeV3Verifier.verify(apkPath);
+            Certificate[][] signerCerts = new Certificate[][] { vSigner.certs };
+            Signature[] signerSigs = convertToSignatures(signerCerts);
+            Signature[] pastSignerSigs = null;
+            int[] pastSignerSigsFlags = null;
+            if (vSigner.por != null) {
+                // populate proof-of-rotation information
+                pastSignerSigs = new Signature[vSigner.por.certs.size()];
+                pastSignerSigsFlags = new int[vSigner.por.flagsList.size()];
+                for (int i = 0; i &lt; pastSignerSigs.length; i++) {
+                    pastSignerSigs[i] = new Signature(vSigner.por.certs.get(i).getEncoded());
+                    pastSignerSigsFlags[i] = vSigner.por.flagsList.get(i);
+                }
+            }
+            return new PackageParser.SigningDetails(
+                    signerSigs, SignatureSchemeVersion.SIGNING_BLOCK_V3,
+                    pastSignerSigs, pastSignerSigsFlags);
+        } 
+
+        ......
+
+        // try v2
+        Trace.traceBegin(TRACE_TAG_PACKAGE_MANAGER, "verifyV2");
+        try {
+            // 3-1 V2 验签的正式入口
+            Certificate[][] signerCerts = ApkSignatureSchemeV2Verifier.verify(apkPath);
+            Signature[] signerSigs = convertToSignatures(signerCerts);
+
+            return new PackageParser.SigningDetails(
+                    signerSigs, SignatureSchemeVersion.SIGNING_BLOCK_V2);
+        } catch (SignatureNotFoundException e) {
+            // not signed with v2, try older if allowed
+            if (minSignatureSchemeVersion &gt;= SignatureSchemeVersion.SIGNING_BLOCK_V2) {
+                throw new PackageParserException(INSTALL_PARSE_FAILED_NO_CERTIFICATES,
+                        "No APK Signature Scheme v2 signature in package " + apkPath, e);
+            }
+        } catch (Exception e) {
+            // APK Signature Scheme v2 signature found but did not verify
+            throw new  PackageParserException(INSTALL_PARSE_FAILED_NO_CERTIFICATES,
+                    "Failed to collect certificates from " + apkPath
+                            + " using APK Signature Scheme v2", e);
+        } finally {
+            Trace.traceEnd(TRACE_TAG_PACKAGE_MANAGER);
+        }
+
+    ......
+
+    }
+</pre></td></tr></tbody></table></code></pre></div></div>
+
+<p>到此，在注视3-1处，找到了 V2 验签的函数入口： ApkSignatureSchemeV2Verifier.verify(apkPath);<br />
+接着看源码，来到文件：<br />
+/frameworks/base/core/java/android/util/apk/ApkSignatureSchemeV2Verifier.java<br />
+代码段4:</p>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39
+40
+41
+</pre></td><td class="rouge-code"><pre>    /**
+     * Verifies APK Signature Scheme v2 signatures of the provided APK and returns the certificates
+     * associated with each signer.
+     *
+     * @throws SignatureNotFoundException if the APK is not signed using APK Signature Scheme v2.
+     * @throws SecurityException if a APK Signature Scheme v2 signature of this APK does not verify.
+     * @throws IOException if an I/O error occurs while reading the APK file.
+     */
+    public static X509Certificate[][] verify(String apkFile)
+            throws SignatureNotFoundException, SecurityException, IOException {
+        // 4-1 接着下一步
+        VerifiedSigner vSigner = verify(apkFile, true);
+        return vSigner.certs;
+    }
+
+
+    private static VerifiedSigner verify(String apkFile, boolean verifyIntegrity)
+            throws SignatureNotFoundException, SecurityException, IOException {
+        try (RandomAccessFile apk = new RandomAccessFile(apkFile, "r")) {
+            // 4-2 接着下一步
+            return verify(apk, verifyIntegrity);
+        }
+    }
+
+
+    /**
+     * Verifies APK Signature Scheme v2 signatures of the provided APK and returns the certificates
+     * associated with each signer.
+     *
+     * @throws SignatureNotFoundException if the APK is not signed using APK Signature Scheme v2.
+     * @throws SecurityException if an APK Signature Scheme v2 signature of this APK does not
+     *         verify.
+     * @throws IOException if an I/O error occurs while reading the APK file.
+     */
+    private static VerifiedSigner verify(RandomAccessFile apk, boolean verifyIntegrity)
+            throws SignatureNotFoundException, SecurityException, IOException {
+        // 4-3
+        SignatureInfo signatureInfo = findSignature(apk);
+        // 4-4
+        return verify(apk, signatureInfo, verifyIntegrity);
+    }
+</pre></td></tr></tbody></table></code></pre></div></div>
+
+<p>经过一系列的调用，我们来到了关键的一步，V2 验签的主流程。</p>
+
+<h1 id="v2-验签的主流程">V2 验签的主流程</h1>
+<p>验签的过程主要分两步：<br />
+第一，代码段4中的注释4-3，提取签名块；<br />
+第二，代码段4中的注释4-4，验证签名块。</p>
+
+<h1 id="v2-签名块的提取">V2 签名块的提取</h1>
+<p>接着代码段4中的注释4-3，执行了 findSignature 函数，来到该文件：<br />
+/frameworks/base/core/java/android/util/apk/ApkSignatureSchemeV2Verifier.java<br />
+代码段5:</p>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+</pre></td><td class="rouge-code"><pre>    /**
+     * Returns the APK Signature Scheme v2 block contained in the provided APK file and the
+     * additional information relevant for verifying the block against the file.
+     *
+     * @throws SignatureNotFoundException if the APK is not signed using APK Signature Scheme v2.
+     * @throws IOException if an I/O error occurs while reading the APK file.
+     */
+    private static SignatureInfo findSignature(RandomAccessFile apk)
+            throws IOException, SignatureNotFoundException {
+        return ApkSigningBlockUtils.findSignature(apk, APK_SIGNATURE_SCHEME_V2_BLOCK_ID);
+    }
+</pre></td></tr></tbody></table></code></pre></div></div>
+
+<p>接着执行 ApkSigningBlockUtils 类 findSignature 函数，来到文件：
+/frameworks/base/core/java/android/util/apk/ApkSigningBlockUtils.java<br />
+代码段6:</p>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39
+</pre></td><td class="rouge-code"><pre>    /**
+     * Returns the APK Signature Scheme block contained in the provided APK file and the
+     * additional information relevant for verifying the block against the file.
+     *
+     * @param blockId the ID value in the APK Signing Block's sequence of ID-value pairs
+     *                identifying the appropriate block to find, e.g. the APK Signature Scheme v2
+     *                block ID.
+     *
+     * @throws SignatureNotFoundException if the APK is not signed using this scheme.
+     * @throws IOException if an I/O error occurs while reading the APK file.
+     */
+    static SignatureInfo findSignature(RandomAccessFile apk, int blockId)
+            throws IOException, SignatureNotFoundException {
+        // Find the ZIP End of Central Directory (EoCD) record.
+        Pair&lt;ByteBuffer, Long&gt; eocdAndOffsetInFile = getEocd(apk);
+        ByteBuffer eocd = eocdAndOffsetInFile.first;
+        long eocdOffset = eocdAndOffsetInFile.second;
+        if (ZipUtils.isZip64EndOfCentralDirectoryLocatorPresent(apk, eocdOffset)) {
+            throw new SignatureNotFoundException("ZIP64 APK not supported");
+        }
+
+        // Find the APK Signing Block. The block immediately precedes the Central Directory.
+        long centralDirOffset = getCentralDirOffset(eocd, eocdOffset);
+        Pair&lt;ByteBuffer, Long&gt; apkSigningBlockAndOffsetInFile =
+                findApkSigningBlock(apk, centralDirOffset);
+        ByteBuffer apkSigningBlock = apkSigningBlockAndOffsetInFile.first;
+        long apkSigningBlockOffset = apkSigningBlockAndOffsetInFile.second;
+
+        // Find the APK Signature Scheme Block inside the APK Signing Block.
+        ByteBuffer apkSignatureSchemeBlock = findApkSignatureSchemeBlock(apkSigningBlock,
+                blockId);
+
+        return new SignatureInfo(
+                apkSignatureSchemeBlock,
+                apkSigningBlockOffset,
+                centralDirOffset,
+                eocdOffset,
+                eocd);
+    }
+</pre></td></tr></tbody></table></code></pre></div></div>
+
+<p>先看到函数的末尾 return 了一个 SignatureInfo 类的实例，并入参了5个参数，可知前面的代码的作用就是获取到这5个参数的。从名字可以看出，这5个参数分别表示：签名块、签名块偏移量、中央目录区偏移量、中央结尾区偏移量、中央结尾区；<br />
+可知验签的时候需要用到这几个参数。<br />
+其中的签名块，apkSignatureSchemeBlock，如下图所示的红色块：<br />
+再次看到该官方的图片：
+<img src="http://guoke24.top/img/apk-before-after-signing.png" alt="" /><br /><br />
+这一步的目的就是提取红色的签名块。<br />
+具体怎么获取这几个参数的源码分析先省略了，主要就是 zip 文件格式的操作。<br />
+下面简单讲一下原理：<br />
+第一，根据 eocd 的标示ID 0x06054b50，找到 eocd 的字节数组。<br />
+第二，再截取 eocd 的字节数组中的起始下标为16的四个字节，转换成 int 类型数据的值，该数值就是 centralDirOffset ，即中央目录区偏移量，此时就找到了中央目录区。<br />
+第三，紧挨着中央目录区之前的是16个字节魔数，再往前的8个字节，表示签名块字节数的大小。因第二部已经得知中央目录区偏移量，所以签名块的字节数组和其偏移量都可以找出来了。</p>
+
+<p>再来一张表格图示，配合理解：<br />
+<img src="http://guoke24.top/img/v2签名块表格图示.png" alt="" /><br /></p>
+
+<p>再用一个带有原生 V2 签名和自定义 V2 格式签名的 APK 的例子：</p>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+</pre></td><td class="rouge-code"><pre>50 4b 03 04 0a 00 00 08 // 内容区start
+...
+3c 04 00 00 2B 05 00 00 // 内容区end
+81 0c 00 00 00 00 00 00 // apk签名分块长度前缀
+D0 05 00 00 00 00 00 00 // v2签名分块的长度前缀
+1a 87 09 71             // v2签名分块的ID
+....
+92 ea 35 02 03 01 00 01 // v2签名分块end
+89 06 00 00 00 00 00 00 // 自定义签名分块长度前缀
+78 67 64 32             // 自定义签名分块的ID
+....
+7c 04 66 63 7d c2 b3 25 // 自定义签名分块end
+81 0c 00 00 00 00 00 00 // apk签名分块长度后缀
+.. .. .. .. .. .. .. .. 42 6c 6f 63 6b 20 34 32//魔数
+50 4b 01 02 09 00 09 00 // cd 中央区 start
+........... 2e 52 53 41 // cd 中央区 end
+50 4b 05 06 // eocd 中央尾区 开头的标示，大端序为 06 05 4b 50
+...
+0f da c3 00 // cd 中央区 偏移量
+00 00 // eocd 中央尾区 end
+</pre></td></tr></tbody></table></code></pre></div></div>
+
+<p>到此提取签名块的分析告一段落。</p>
+
+<h1 id="v2-签名块的验证">V2 签名块的验证</h1>
+<p>再回到代码段4中的注释4-4，<br />
+/frameworks/base/core/java/android/util/apk/ApkSignatureSchemeV2Verifier.java</p>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+</pre></td><td class="rouge-code"><pre>    private static VerifiedSigner verify(RandomAccessFile apk, boolean verifyIntegrity)
+            throws SignatureNotFoundException, SecurityException, IOException {
+        // 4-3
+        SignatureInfo signatureInfo = findSignature(apk);
+        // 4-4
+        return verify(apk, signatureInfo, verifyIntegrity);
+    }
+</pre></td></tr></tbody></table></code></pre></div></div>
+<p>注释4-4处，执行的 verify 函数，去验证签名块信息。<br />
+在看代码前，先看看签名块的结构：<br />
+<strong>签名块 v2 分块</strong> 用类json格式代码表示如下：</p>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+</pre></td><td class="rouge-code"><pre>apkSignatureSchemeV2Block，// V2 分块  
+{
+	len-signers[len-signer] // 带长度前缀的签名者集（内含多个签名者）
+	{
+		signer
+		{
+			len-signedData, //待签名数据
+			{
+				len-digests["len-(签名算法ID-(len-摘要))"],  
+				len-certificates["len-certificate"], //从第一个 certificate 内的公钥，对应签名的私钥
+				len-additional_attributes["len-(ID-(len-attribute))"],  
+			}
+			len-signatures["len-(签名算法ID-(len-signature))"], //签名值 
+			len-publicKey // 公钥，第一个 certificate 内取到的 
+		}
+}
+</pre></td></tr></tbody></table></code></pre></div></div>
+
+<p>接着看代码，verify 函数定义在该文件：<br />
+/frameworks/base/core/java/android/util/apk/ApkSignatureSchemeV2Verifier.java<br />
+代码段7:</p>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39
+40
+41
+42
+43
+44
+45
+46
+47
+48
+49
+50
+51
+52
+53
+54
+55
+56
+57
+58
+59
+60
+61
+62
+63
+64
+65
+66
+67
+68
+69
+70
+</pre></td><td class="rouge-code"><pre>    /**
+     * Verifies the contents of the provided APK file against the provided APK Signature Scheme v2
+     * Block.
+     *
+     * @param signatureInfo APK Signature Scheme v2 Block and information relevant for verifying it
+     *        against the APK file.
+     */
+    private static VerifiedSigner verify(
+            RandomAccessFile apk,
+            SignatureInfo signatureInfo,
+            boolean doVerifyIntegrity) throws SecurityException, IOException {
+        int signerCount = 0;
+        Map&lt;Integer, byte[]&gt; contentDigests = new ArrayMap&lt;&gt;();
+        List&lt;X509Certificate[]&gt; signerCerts = new ArrayList&lt;&gt;();
+        CertificateFactory certFactory;
+        try {
+            certFactory = CertificateFactory.getInstance("X.509");
+        } catch (CertificateException e) {
+            throw new RuntimeException("Failed to obtain X.509 CertificateFactory", e);
+        }
+        ByteBuffer signers;
+        try {
+            // 7-1
+            // 入参的 signatureInfo.signatureBlock 格式是 len-signers[len-signer]
+            // 返回的 signers 格式是 signers[len-signer]
+            signers = getLengthPrefixedSlice(signatureInfo.signatureBlock);
+            // signers 是一个签名者集
+        } catch (IOException e) {
+            throw new SecurityException("Failed to read list of signers", e);
+        }
+        while (signers.hasRemaining()) { // 把所有签名者逐个取出
+            signerCount++;
+            try {
+                // 7-2 返回的 signer 是不带长度前缀的，即是 [len-signer] 中的 signer
+                ByteBuffer signer = getLengthPrefixedSlice(signers);
+                // 7-3 验证 signer,即验证签名
+                X509Certificate[] certs = verifySigner(signer, contentDigests, certFactory);
+                signerCerts.add(certs);
+            } catch (IOException | BufferUnderflowException | SecurityException e) {
+                throw new SecurityException(
+                        "Failed to parse/verify signer #" + signerCount + " block",
+                        e);
+            }
+        }
+
+        if (signerCount &lt; 1) {
+            throw new SecurityException("No signers found");
+        }
+
+        if (contentDigests.isEmpty()) {
+            throw new SecurityException("No content digests found");
+        }
+
+        if (doVerifyIntegrity) {
+            // 7-4 验证摘要
+            ApkSigningBlockUtils.verifyIntegrity(contentDigests, apk, signatureInfo);
+        }
+
+        byte[] verityRootHash = null;
+        if (contentDigests.containsKey(CONTENT_DIGEST_VERITY_CHUNKED_SHA256)) {
+            byte[] verityDigest = contentDigests.get(CONTENT_DIGEST_VERITY_CHUNKED_SHA256);
+            verityRootHash = ApkSigningBlockUtils.parseVerityDigestAndVerifySourceLength(
+                    verityDigest, apk.length(), signatureInfo);
+        }
+
+        // 7-5 到此处通过验证，返回数据继续下一步操作
+        return new VerifiedSigner(
+                signerCerts.toArray(new X509Certificate[signerCerts.size()][]),
+                verityRootHash);
+    }
+</pre></td></tr></tbody></table></code></pre></div></div>
+<p>该段代码揭示了验签的主逻辑，分两步：<br />
+第一步：在注释7-3处，验证签名；<br />
+第二步：在注释7-4处，验证摘要。</p>
+
+<h1 id="v2-签名块-验证签名值">V2 签名块-验证签名值</h1>
+<p>那么我们接着注释7-3处执行的 verifySigner 函数，接着看代码：<br />
+/frameworks/base/core/java/android/util/apk/ApkSignatureSchemeV2Verifier.java <br />
+代码段8：</p>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39
+40
+41
+42
+43
+44
+45
+46
+47
+48
+49
+50
+51
+52
+53
+54
+55
+56
+57
+58
+59
+60
+61
+62
+63
+64
+65
+66
+67
+68
+69
+70
+71
+72
+73
+74
+75
+76
+77
+78
+79
+80
+81
+82
+83
+84
+85
+86
+87
+88
+89
+90
+91
+92
+93
+94
+95
+96
+97
+98
+99
+100
+101
+102
+103
+104
+105
+106
+107
+108
+109
+110
+111
+112
+113
+114
+115
+116
+117
+118
+119
+120
+121
+122
+123
+124
+125
+126
+127
+128
+129
+130
+131
+132
+133
+134
+135
+136
+137
+138
+139
+140
+141
+142
+143
+144
+145
+146
+147
+148
+149
+150
+151
+152
+153
+154
+155
+156
+157
+158
+159
+160
+161
+162
+163
+164
+165
+166
+167
+168
+169
+170
+171
+172
+173
+174
+175
+176
+177
+178
+179
+180
+181
+</pre></td><td class="rouge-code"><pre>    private static X509Certificate[] verifySigner(
+            ByteBuffer signerBlock,
+            Map&lt;Integer, byte[]&gt; contentDigests,
+            CertificateFactory certFactory) throws SecurityException, IOException {
+
+        // 不带长度前缀的 signedData 的结构
+        //		{
+        //			len-digests["len-(签名算法ID-(len-摘要))"],
+        //			len-certificates["len-certificate"], //从第一个 certificate 内的公钥，对应签名的私钥
+        //			len-additional_attributes["len-(ID-(len-attribute))"],
+        //		}
+
+        ByteBuffer signedData = getLengthPrefixedSlice(signerBlock);
+
+        // 不带长度前缀的 signatures 的结构
+        // ["len-(签名算法ID-(len-signature))"]
+        ByteBuffer signatures = getLengthPrefixedSlice(signerBlock);
+
+        // 公钥，纯字节数组
+        byte[] publicKeyBytes = readLengthPrefixedByteArray(signerBlock);
+
+        int signatureCount = 0;
+        int bestSigAlgorithm = -1;
+        byte[] bestSigAlgorithmSignatureBytes = null;
+        List&lt;Integer&gt; signaturesSigAlgorithms = new ArrayList&lt;&gt;();
+        while (signatures.hasRemaining()) {
+            signatureCount++;
+            try {
+                // 不带长度前缀的 signature 的结构：
+                // [签名算法ID-(len-signature)]
+                ByteBuffer signature = getLengthPrefixedSlice(signatures);
+                if (signature.remaining() &lt; 8) {
+                    throw new SecurityException("Signature record too short");
+                }
+                // 从 [签名算法ID-(len-signature)] 结构中取得 "签名算法ID"
+                int sigAlgorithm = signature.getInt();
+                signaturesSigAlgorithms.add(sigAlgorithm);
+                if (!isSupportedSignatureAlgorithm(sigAlgorithm)) {
+                    continue;
+                }
+                if ((bestSigAlgorithm == -1)
+                        || (compareSignatureAlgorithm(sigAlgorithm, bestSigAlgorithm) &gt; 0)) {
+                    // 记录最佳算法 和 对应的签名值
+                    bestSigAlgorithm = sigAlgorithm;
+                    bestSigAlgorithmSignatureBytes = readLengthPrefixedByteArray(signature);
+                }
+            } catch (IOException | BufferUnderflowException e) {
+                throw new SecurityException(
+                        "Failed to parse signature record #" + signatureCount,
+                        e);
+            }
+        }
+        if (bestSigAlgorithm == -1) {
+            if (signatureCount == 0) {
+                throw new SecurityException("No signatures found");
+            } else {
+                throw new SecurityException("No supported signatures found");
+            }
+        }
+        // =================================================
+        // === 到此，取到最佳签名算法，保存在变量：bestSigAlgorithm
+        // === 以及最佳签名算法对应的签名值，保存在变量：bestSigAlgorithmSignatureBytes
+
+        // 签名算法 对应的 加密算法
+        String keyAlgorithm = getSignatureAlgorithmJcaKeyAlgorithm(bestSigAlgorithm);
+
+        Pair&lt;String, ? extends AlgorithmParameterSpec&gt; signatureAlgorithmParams =
+                getSignatureAlgorithmJcaSignatureAlgorithm(bestSigAlgorithm);
+
+        String jcaSignatureAlgorithm = signatureAlgorithmParams.first;
+        AlgorithmParameterSpec jcaSignatureAlgorithmParams = signatureAlgorithmParams.second;
+        boolean sigVerified;
+        try {
+            PublicKey publicKey =
+                    KeyFactory.getInstance(keyAlgorithm)// 根据 加密算法 和 签名块中取到的公钥字节数组 ，生成公钥实例
+                            .generatePublic(new X509EncodedKeySpec(publicKeyBytes));
+
+            Signature sig = Signature.getInstance(jcaSignatureAlgorithm);
+            sig.initVerify(publicKey);// 填入 公钥
+            if (jcaSignatureAlgorithmParams != null) {
+                sig.setParameter(jcaSignatureAlgorithmParams);
+            }
+            sig.update(signedData);// 填入 待签名数据
+            sigVerified = sig.verify(bestSigAlgorithmSignatureBytes);// 验证 签名值
+        } catch (NoSuchAlgorithmException | InvalidKeySpecException | InvalidKeyException
+                | InvalidAlgorithmParameterException | SignatureException e) {
+            throw new SecurityException(
+                    "Failed to verify " + jcaSignatureAlgorithm + " signature", e);
+        }
+        if (!sigVerified) {
+            throw new SecurityException(jcaSignatureAlgorithm + " signature did not verify");
+        }
+
+        // Signature over signedData has verified.
+        // 翻译：签名值 和 待签名数据 通过验证
+
+        byte[] contentDigest = null;
+        signedData.clear();
+        // digests 的格式为 ["len-(签名算法ID-(len-摘要))"]
+        ByteBuffer digests = getLengthPrefixedSlice(signedData);
+        List&lt;Integer&gt; digestsSigAlgorithms = new ArrayList&lt;&gt;();
+        int digestCount = 0;
+        while (digests.hasRemaining()) {
+            digestCount++;
+            try {
+                // digest 的格式为 "签名算法ID-(len-摘要)"
+                ByteBuffer digest = getLengthPrefixedSlice(digests);
+                if (digest.remaining() &lt; 8) {
+                    throw new IOException("Record too short");
+                }
+                // 取到的是 "签名算法ID-(len-摘要)" 格式中的 签名算法ID
+                int sigAlgorithm = digest.getInt();
+                digestsSigAlgorithms.add(sigAlgorithm);
+                if (sigAlgorithm == bestSigAlgorithm) {
+                    // 取 最佳签名算法 对应的 摘要值
+                    contentDigest = readLengthPrefixedByteArray(digest);
+                }
+            } catch (IOException | BufferUnderflowException e) {
+                throw new IOException("Failed to parse digest record #" + digestCount, e);
+            }
+        }
+
+        if (!signaturesSigAlgorithms.equals(digestsSigAlgorithms)) {
+            throw new SecurityException(
+                    "Signature algorithms don't match between digests and signatures records");
+        }
+        // 最佳签名算法 对应的 摘要算法
+        int digestAlgorithm = getSignatureAlgorithmContentDigestAlgorithm(bestSigAlgorithm);
+        // "摘要算法 - 摘要值" 的映射
+        byte[] previousSignerDigest = contentDigests.put(digestAlgorithm, contentDigest);
+        if ((previousSignerDigest != null)
+                &amp;&amp; (!MessageDigest.isEqual(previousSignerDigest, contentDigest))) {
+            throw new SecurityException(
+                    getContentDigestAlgorithmJcaDigestAlgorithm(digestAlgorithm)
+                    + " contents digest does not match the digest specified by a preceding signer");
+        }
+
+        // certificates 的格式为 ["len-certificate"]
+        ByteBuffer certificates = getLengthPrefixedSlice(signedData);
+        List&lt;X509Certificate&gt; certs = new ArrayList&lt;&gt;();
+        int certificateCount = 0;
+        while (certificates.hasRemaining()) {
+            certificateCount++;
+            // "len-certificate" 格式中的 certificate，经过编码的
+            byte[] encodedCert = readLengthPrefixedByteArray(certificates);
+            X509Certificate certificate;
+            try {
+                certificate = (X509Certificate)
+                        certFactory.generateCertificate(new ByteArrayInputStream(encodedCert));
+            } catch (CertificateException e) {
+                throw new SecurityException("Failed to decode certificate #" + certificateCount, e);
+            }
+            certificate = new VerbatimX509Certificate(
+                    certificate, encodedCert);
+
+            // 经过处理后的证书，放入变量 certs
+            certs.add(certificate);
+        }
+
+        if (certs.isEmpty()) {
+            throw new SecurityException("No certificates listed");
+        }
+        X509Certificate mainCertificate = certs.get(0);
+        byte[] certificatePublicKeyBytes = mainCertificate.getPublicKey().getEncoded();
+        if (!Arrays.equals(publicKeyBytes, certificatePublicKeyBytes)) {
+            throw new SecurityException(
+                    "Public key mismatch between certificate and signature record");
+        }
+
+        // 验证一下附加数据
+        ByteBuffer additionalAttrs = getLengthPrefixedSlice(signedData);
+        verifyAdditionalAttributes(additionalAttrs);
+
+        // 总的来说，该函数的逻辑包括：
+        // 取到最佳算法
+        // 验证签名（最佳算法对应的签名值）
+        // 根据最佳算法，取到摘要，保存到变量 contentDigests（还没验证）
+        // 提取证书，处理编码后，保存到变量 certs
+        // 返回证书数组
+        return certs.toArray(new X509Certificate[certs.size()]);
+    }
+</pre></td></tr></tbody></table></code></pre></div></div>
+<p>该段函数主要的流程都写了注释，记得配合<strong>签名块结构的类json格式的代码</strong>一起看。 
+如果对签名块的结构不了解，可以先看这篇文章：<a href="https://guoke24.top/2019/09/02/V2加签/">源码看 Android V2 签名之加签篇</a></p>
+
+<h1 id="v2-签名块-验证摘要值">V2 签名块-验证摘要值</h1>
+<p>接着代码段7中注释7-4处，执行的 ApkSigningBlockUtils 类的 verifyIntegrity 函数，接着看代码： 
+/frameworks/base/core/java/android/util/apk/ApkSigningBlockUtils.java<br />
+代码段9:</p>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39
+40
+41
+42
+43
+</pre></td><td class="rouge-code"><pre>    static void verifyIntegrity(
+            Map&lt;Integer, byte[]&gt; expectedDigests,
+            RandomAccessFile apk,
+            SignatureInfo signatureInfo) throws SecurityException {
+        // 入参的 expectedDigests 是一个映射"摘要算法 -摘要值"
+
+        if (expectedDigests.isEmpty()) {
+            throw new SecurityException("No digests provided");
+        }
+
+        boolean neverVerified = true;
+
+        Map&lt;Integer, byte[]&gt; expected1MbChunkDigests = new ArrayMap&lt;&gt;();
+        if (expectedDigests.containsKey(CONTENT_DIGEST_CHUNKED_SHA256)) {
+            expected1MbChunkDigests.put(CONTENT_DIGEST_CHUNKED_SHA256,
+                    expectedDigests.get(CONTENT_DIGEST_CHUNKED_SHA256));
+        }
+        if (expectedDigests.containsKey(CONTENT_DIGEST_CHUNKED_SHA512)) {
+            expected1MbChunkDigests.put(CONTENT_DIGEST_CHUNKED_SHA512,
+                    expectedDigests.get(CONTENT_DIGEST_CHUNKED_SHA512));
+        }
+        // 9-1,CHUNKED_SHA256 和 CHUNKED_SHA512 算法,走这个验证逻辑
+        if (!expected1MbChunkDigests.isEmpty()) {
+            try {
+                verifyIntegrityFor1MbChunkBasedAlgorithm(expected1MbChunkDigests, apk.getFD(),
+                        signatureInfo);
+                neverVerified = false;
+            } catch (IOException e) {
+                throw new SecurityException("Cannot get FD", e);
+            }
+        }
+
+        // 9-2,VERITY_CHUNKED_SHA256 算法,走这个验证逻辑
+        if (expectedDigests.containsKey(CONTENT_DIGEST_VERITY_CHUNKED_SHA256)) {
+            verifyIntegrityForVerityBasedAlgorithm(
+                    expectedDigests.get(CONTENT_DIGEST_VERITY_CHUNKED_SHA256), apk, signatureInfo);
+            neverVerified = false;
+        }
+
+        if (neverVerified) { // 没通过验证，抛异常
+            throw new SecurityException("No known digest exists for integrity check");
+        }
+    }
+</pre></td></tr></tbody></table></code></pre></div></div>
+
+<p>由注释9-1和9-2处，可知：<br />
+若摘要算法为 CHUNKED_SHA256 或 CHUNKED_SHA512，执行 verifyIntegrityFor1MbChunkBasedAlgorithm 函数来验证；<br />
+若摘要算法为 VERITY_CHUNKED_SHA25，执行 verifyIntegrityForVerityBasedAlgorithm 函数来验证。<br />
+我们接着注释9-1的 verifyIntegrityFor1MbChunkBasedAlgorithm 函数，看代码：<br />
+/frameworks/base/core/java/android/util/apk/ApkSigningBlockUtils.java<br />
+代码段10:</p>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39
+40
+41
+42
+43
+44
+45
+46
+47
+48
+49
+50
+51
+52
+53
+54
+55
+56
+57
+58
+59
+</pre></td><td class="rouge-code"><pre>    private static void verifyIntegrityFor1MbChunkBasedAlgorithm(
+            Map&lt;Integer, byte[]&gt; expectedDigests,
+            FileDescriptor apkFileDescriptor,
+            SignatureInfo signatureInfo) throws SecurityException {
+        // We need to verify the integrity of the following three sections of the file:
+        // 1. Everything up to the start of the APK Signing Block.
+        // 2. ZIP Central Directory.
+        // 3. ZIP End of Central Directory (EoCD).
+        // Each of these sections is represented as a separate DataSource instance below.
+
+        // To handle large APKs, these sections are read in 1 MB chunks using memory-mapped I/O to
+        // avoid wasting physical memory. In most APK verification scenarios, the contents of the
+        // APK are already there in the OS's page cache and thus mmap does not use additional
+        // physical memory.
+        DataSource beforeApkSigningBlock =
+                new MemoryMappedFileDataSource(apkFileDescriptor, 0,
+                        signatureInfo.apkSigningBlockOffset);
+        DataSource centralDir =
+                new MemoryMappedFileDataSource(
+                        apkFileDescriptor, signatureInfo.centralDirOffset,
+                        signatureInfo.eocdOffset - signatureInfo.centralDirOffset);
+
+        // For the purposes of integrity verification, ZIP End of Central Directory's field Start of
+        // Central Directory must be considered to point to the offset of the APK Signing Block.
+        ByteBuffer eocdBuf = signatureInfo.eocd.duplicate();
+        eocdBuf.order(ByteOrder.LITTLE_ENDIAN);
+        ZipUtils.setZipEocdCentralDirectoryOffset(eocdBuf, signatureInfo.apkSigningBlockOffset);
+        DataSource eocd = new ByteBufferDataSource(eocdBuf);
+
+        int[] digestAlgorithms = new int[expectedDigests.size()];
+        int digestAlgorithmCount = 0;
+
+        // 这里假设入参的 expectedDigests 带有多个"摘要算法-摘要值"的映射对
+        for (int digestAlgorithm : expectedDigests.keySet()) {
+            digestAlgorithms[digestAlgorithmCount] = digestAlgorithm;
+            digestAlgorithmCount++;
+        }
+        byte[][] actualDigests;
+        try {
+            actualDigests =
+                    computeContentDigestsPer1MbChunk(
+                            digestAlgorithms,
+                            new DataSource[] {beforeApkSigningBlock, centralDir, eocd});
+        } catch (DigestException e) {
+            throw new SecurityException("Failed to compute digest(s) of contents", e);
+        }
+
+        // 同摘要算法下，对比 实际摘要值 和 期望摘要值
+        for (int i = 0; i &lt; digestAlgorithms.length; i++) {
+            int digestAlgorithm = digestAlgorithms[i];
+            byte[] expectedDigest = expectedDigests.get(digestAlgorithm);
+            byte[] actualDigest = actualDigests[i];
+            if (!MessageDigest.isEqual(expectedDigest, actualDigest)) {
+                throw new SecurityException(
+                        getContentDigestAlgorithmJcaDigestAlgorithm(digestAlgorithm)
+                                + " digest of contents did not verify");
+            }
+        }
+    }
+</pre></td></tr></tbody></table></code></pre></div></div>
+
+<p>我们再接着代码段9中的注释9-2处的 verifyIntegrityForVerityBasedAlgorithm 函数，接着看代码：<br />
+/frameworks/base/core/java/android/util/apk/ApkSigningBlockUtils.java<br />
+代码段10:</p>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+</pre></td><td class="rouge-code"><pre>    private static void verifyIntegrityForVerityBasedAlgorithm(
+            byte[] expectedDigest,
+            RandomAccessFile apk,
+            SignatureInfo signatureInfo) throws SecurityException {
+        try {
+            // 期望的hash值
+            byte[] expectedRootHash = parseVerityDigestAndVerifySourceLength(expectedDigest,
+                    apk.length(), signatureInfo);
+            // verity 带有实际的hash值
+            ApkVerityBuilder.ApkVerityResult verity = ApkVerityBuilder.generateApkVerity(apk,
+                    signatureInfo, new ByteBufferFactory() {
+                        @Override
+                        public ByteBuffer create(int capacity) {
+                            return ByteBuffer.allocate(capacity);
+                        }
+                    });
+            // 进行比较
+            if (!Arrays.equals(expectedRootHash, verity.rootHash)) {
+                throw new SecurityException("APK verity digest of contents did not verify");
+            }
+        } catch (DigestException | IOException | NoSuchAlgorithmException e) {
+            throw new SecurityException("Error during verification", e);
+        }
+    }
+</pre></td></tr></tbody></table></code></pre></div></div>
+
+<p>到此验签的代码就贴完了。本文章主要是对眼前的流程做一个大致的记录，如果需要详细的研究，还是得取看源码。</p>
+
+:ET

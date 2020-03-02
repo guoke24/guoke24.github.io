@@ -1,0 +1,5 @@
+I"S<h1 id="前言">前言</h1>
+<p>9月初写的这篇文章：<a href="https://guoke24.top/2019/09/02/V2加签/">源码看 Android V2 签名之加签篇</a>，从源码的角度解析了加签的过程，同时也了解了签名 APK 的结构，
+如下图：
+<img src="http://guoke24.top/img/apk-before-after-signing.png" alt="" /><br /></p>
+:ET

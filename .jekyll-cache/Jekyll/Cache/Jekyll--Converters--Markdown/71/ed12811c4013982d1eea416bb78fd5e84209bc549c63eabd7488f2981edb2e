@@ -1,0 +1,422 @@
+I"�<<h1 id="前言">前言</h1>
+<p>由该文章： [[Activity 的根视图 – DecorView 的构成 ]] ，可知，
+一个 Activity 持有 一个 PhoneWindow 类对象，
+PhoneWindow 类对象内的 mDecor 变量，就是 Activity 的根视图 DecorView 实例。</p>
+
+<p>前提知识交代完毕。</p>
+<h1 id="概览">概览</h1>
+
+<p>当新建一个Activity 的时候，ActivityManagerService(简称 AMS) 会通过 Binder 机制，
+跨进程通讯，调用到 ActivityThread#H#handleMessage –&gt; ActivityThread 的 handleLaunchActivity 函数，然后执行 handleResumeActivity 函数。</p>
+
+<ul>
+  <li>
+    <p>ActivityThread#handleLaunchActivity
+Activity 内的 PhoneWindow 实例内的 DecorView 实例，创建完成<br /></p>
+  </li>
+  <li>
+    <p>ActivityThread#handleResumeActivity
+创建 ViewRootImpl 实例，DecorView 实例的引用传递给其内部的 mView 变量，然后执行 ViewRootImpl#requestLayout 函数，开始 View 的工作流程。</p>
+  </li>
+</ul>
+
+<p><br />
+接着从 handleLaunchActivity 函数开始看。</p>
+
+<h1 id="handlelaunchactivity">handleLaunchActivity</h1>
+
+<ul>
+  <li>ActivityThread#handleLaunchActivity
+    <div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+</pre></td><td class="rouge-code"><pre>  WindowManagerGlobal.initialize();
+
+      final Activity a = performLaunchActivity(r, customIntent);
+</pre></td></tr></tbody></table></code></pre></div>    </div>
+    <p><br /></p>
+  </li>
+  <li>ActivityThread#performLaunchActivity
+    <div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+</pre></td><td class="rouge-code"><pre>if (r.isPersistable()) {
+  mInstrumentation.callActivityOnCreate(activity, r.state, r.persistentState);
+ } else {
+  mInstrumentation.callActivityOnCreate(activity, r.state);
+ }
+</pre></td></tr></tbody></table></code></pre></div>    </div>
+    <p><br /></p>
+  </li>
+  <li>Instrumentation#callActivityOnCreate
+    <div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+</pre></td><td class="rouge-code"><pre>      prePerformCreate(activity);
+      activity.performCreate(icicle);
+      postPerformCreate(activity);
+</pre></td></tr></tbody></table></code></pre></div>    </div>
+    <p><br /></p>
+  </li>
+  <li>Activity#performCreate
+    <div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+</pre></td><td class="rouge-code"><pre>  if (persistentState != null) {
+          onCreate(icicle, persistentState);
+      } else {
+          onCreate(icicle);
+      }
+</pre></td></tr></tbody></table></code></pre></div>    </div>
+  </li>
+  <li>Activity#onCreate</li>
+</ul>
+
+<p><strong>小节一下</strong><br />
+到此可知，ActivityThread#handleLaunchActivity 函数，会触发 Activity#onCreate 函数，
+接着调用 setContent 函数，接下来的调用链可以参考 [[Activity 的根视图 – DecorView]] ，结果就是：
+Activity 内的 PhoneWindow 实例内的 DecorView 实例，在此时创建。
+并通过 Activity#onCreate 内调用 setContentView 函数，构造以 DecorView 为根的视图树 ViewTree 。
+在 Activity 中，可通过 getWindow().getDecorView() 来获得 DecorView 类实例。</p>
+
+<h5 id="本小节调用链">本小节调用链：</h5>
+<ul>
+  <li>ActivityThread#handleLaunchActivity</li>
+  <li>ActivityThread#performLaunchActivity</li>
+  <li>Instrumentation#callActivityOnCreate</li>
+  <li>Activity#performCreate</li>
+  <li>Activity#onCreate</li>
+</ul>
+
+<p><br />
+DecorView 类实例创建完成后，就需要开始工作流程了。在哪里开始的呢？</p>
+
+<p>当 ActivityThread 的 handleLaunchActivity 函数执行完之后，handleResumeActivity 也会被执行，该函数会导致视图树的工作流程的开始。
+我们从 ActivityThread 的 handleResumeActivity 函数开始看。</p>
+
+<h1 id="handleresumeactivity">handleResumeActivity</h1>
+<ul>
+  <li>ActivityThread#handleResumeActivity
+    <div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+</pre></td><td class="rouge-code"><pre>  View decor = r.window.getDecorView();
+  // 略。。。
+  ViewManager wm = a.getWindowManager();
+  WindowManager.LayoutParams l = r.window.getAttributes();
+  // 略。。。
+  wm.addView(decor, l);
+</pre></td></tr></tbody></table></code></pre></div>    </div>
+    <p><br /></p>
+  </li>
+  <li>WindowManagerImpl#addView</li>
+  <li>WindowManagerGlobal#addView
+    <div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+</pre></td><td class="rouge-code"><pre>  root = new ViewRootImpl(view.getContext(), display);
+  // 略。。。
+  try {
+              root.setView(view, wparams, panelParentView);
+      }
+</pre></td></tr></tbody></table></code></pre></div>    </div>
+    <p><br /></p>
+  </li>
+  <li>ViewRootImpl#setView
+    <div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+</pre></td><td class="rouge-code"><pre>public void setView(View view, WindowManager.LayoutParams attrs, View panelParentView) {
+    synchronized (this) {
+  if (mView == null) {
+      mView = view;
+
+      mWindowAttributes.copyFrom(attrs);
+      // 略。。。
+      // Schedule the first layout -before- adding to the window
+      // manager, to make sure we do the relayout before receiving
+      // any other events from the system.
+      requestLayout();
+</pre></td></tr></tbody></table></code></pre></div>    </div>
+  </li>
+  <li>ViewRootImpl#requestLayout
+    <div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+</pre></td><td class="rouge-code"><pre>  // 开始 View 的工作流程
+</pre></td></tr></tbody></table></code></pre></div>    </div>
+  </li>
+</ul>
+
+<p><strong>小节一下</strong><br />
+到此可知，ActivityThread#handleResumeActivity 会调用到 ViewRootImpl#setView，
+在此期间，创建 ViewRootImpl 实例，把创建好的 DecorView 实例，传递给 ViewRootImpl 实例，交给其内部的 mView 变量引用，然后执行 ViewRootImpl#requestLayout 函数，开始 View 的工作流程。</p>
+
+<h5 id="本小节调用链-1">本小节调用链：</h5>
+<ul>
+  <li>ActivityThread#handleResumeActivity</li>
+  <li>WindowManagerImpl#addView</li>
+  <li>WindowManagerGlobal#addView</li>
+  <li>ViewRootImpl#setView</li>
+  <li>ViewRootImpl#requestLayout</li>
+</ul>
+
+<p>接着看 ViewRootImpl#requestLayout 函数。</p>
+
+<h3 id="requestlayout">requestLayout</h3>
+<ul>
+  <li>ViewRootImpl#requestLayout
+    <div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+</pre></td><td class="rouge-code"><pre>  @Override
+  public void requestLayout() {
+      if (!mHandlingLayoutInLayoutRequest) {
+          checkThread();
+          mLayoutRequested = true;
+          scheduleTraversals();
+      }
+  }
+</pre></td></tr></tbody></table></code></pre></div>    </div>
+  </li>
+  <li>ViewRootImpl#scheduleTraversals
+    <div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+</pre></td><td class="rouge-code"><pre>  void scheduleTraversals() {
+      if (!mTraversalScheduled) {
+          mTraversalScheduled = true;
+          mTraversalBarrier = mHandler.getLooper().getQueue().postSyncBarrier();
+          mChoreographer.postCallback(
+                  Choreographer.CALLBACK_TRAVERSAL, mTraversalRunnable/*接着这看*/, null);
+
+  // ......
+      }
+  }
+</pre></td></tr></tbody></table></code></pre></div>    </div>
+  </li>
+  <li>ViewRootImpl#mTraversalRunnable
+    <div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+</pre></td><td class="rouge-code"><pre>  final TraversalRunnable mTraversalRunnable = new TraversalRunnable();
+
+  final class TraversalRunnable implements Runnable {
+      @Override
+      public void run() {
+          doTraversal();
+      }
+  }
+</pre></td></tr></tbody></table></code></pre></div>    </div>
+  </li>
+  <li>ViewRootImpl#doTraversal
+    <div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+</pre></td><td class="rouge-code"><pre>  void doTraversal() {
+      if (mTraversalScheduled) {
+          mTraversalScheduled = false;
+          mHandler.getLooper().getQueue().removeSyncBarrier(mTraversalBarrier);
+
+     // 。。。
+
+          performTraversals();// 此处触发三大流程 
+	  
+     // 。。。
+      }
+  }
+</pre></td></tr></tbody></table></code></pre></div>    </div>
+  </li>
+  <li>
+    <p>ViewRootImpl#performTraversals
+```
+  boolean newSurface = false;
+  WindowManager.LayoutParams lp = mWindowAttributes;
+  Rect frame = mWinFrame;</p>
+
+    <p>if (mWidth != frame.width() || mHeight != frame.height()) {
+      mWidth = frame.width();
+      mHeight = frame.height();
+  }
+  int childWidthMeasureSpec = getRootMeasureSpec(mWidth, lp.width);
+  int childHeightMeasureSpec = getRootMeasureSpec(mHeight, lp.height);</p>
+
+    <div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+</pre></td><td class="rouge-code"><pre>  performMeasure(childWidthMeasureSpec, childHeightMeasureSpec);
+</pre></td></tr></tbody></table></code></pre></div>    </div>
+
+    <p>// ———————- 分割线 ———————-</p>
+
+    <div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+</pre></td><td class="rouge-code"><pre>  final boolean didLayout = layoutRequested &amp;&amp; (!mStopped || mReportNextDraw);
+  if (didLayout) {
+      performLayout(lp, mWidth, mHeight);
+</pre></td></tr></tbody></table></code></pre></div>    </div>
+
+    <p>// ———————- 分割线 ———————-</p>
+
+    <div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+</pre></td><td class="rouge-code"><pre>          if (!hadSurface) {
+              if (mSurface.isValid()) {
+                  newSurface = true;
+</pre></td></tr></tbody></table></code></pre></div>    </div>
+
+    <p>// 略。。。
+      if (!cancelDraw &amp;&amp; !newSurface) {
+          performDraw();</p>
+  </li>
+</ul>
+
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+</pre></td><td class="rouge-code"><pre>
+- ViewRootImpl#performMeasure
+</pre></td></tr></tbody></table></code></pre></div></div>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+</pre></td><td class="rouge-code"><pre>mView.measure(childWidthMeasureSpec, childHeightMeasureSpec); ```
+</pre></td></tr></tbody></table></code></pre></div></div>
+
+<ul>
+  <li>ViewRootImpl#performLayout
+    <div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+</pre></td><td class="rouge-code"><pre>  final View host = mView;
+
+  host.layout(0, 0, host.getMeasuredWidth(), host.getMeasuredHeight());
+
+  mInLayout = false;
+  int numViewsRequestingLayout = mLayoutRequesters.size();
+  if (numViewsRequestingLayout &gt; 0) {
+       // 。。。
+      ArrayList&lt;View&gt; validLayoutRequesters = getValidLayoutRequesters (mLayoutRequesters,false);
+
+       if (validLayoutRequesters != null) {
+         // 。。。
+         mInLayout = true;
+         host.layout(0, 0, host.getMeasuredWidth(), host.getMeasuredHeight());
+         // 。。。
+</pre></td></tr></tbody></table></code></pre></div>    </div>
+  </li>
+  <li>ViewRootImpl#performDraw</li>
+  <li>ViewRootImpl#draw</li>
+  <li>ViewRootImpl#drawSoftware
+    <div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+</pre></td><td class="rouge-code"><pre>  mView.draw(canvas);
+</pre></td></tr></tbody></table></code></pre></div>    </div>
+  </li>
+</ul>
+
+<p><strong>小节一下</strong><br />
+requestLayout 函数，会触发 View 工作的三大流程。
+performTraversals 函数，800行左右的代码，比较复杂，我们只需要知道其内部触发三大流程 performMeasure，performLayout，performDraw 即可。详细源码，[可参考] ( https://www.androidos.net.cn/android/8.0.0_r4/xref/frameworks/base/core/java/android/view/ViewRootImpl.java )。
+<br /></p>
+<h5 id="本小节调用链-2">本小节调用链：</h5>
+<ul>
+  <li>ViewRootImpl#setView</li>
+  <li>ViewRootImpl#requestLayout</li>
+  <li>ViewRootImpl#scheduleTraversals</li>
+  <li>mChoreographer.postCallback( … , mTraversalRunnable , …)</li>
+  <li>ViewRootImpl#TraversalRunnable.run</li>
+  <li>ViewRootImpl#doTraversal</li>
+  <li>ViewRootImpl#performTraversals</li>
+  <li>ViewRootImpl#performMeasure -&gt; DecorView#measure</li>
+  <li>ViewRootImpl#performLayout -&gt; DecorView#layout</li>
+  <li>ViewRootImpl#performDraw -&gt; draw -&gt; drawSoftware -&gt; DecorView#draw</li>
+</ul>
+
+<h1 id="调用链汇总">调用链汇总</h1>
+<ul>
+  <li>
+    <p>AMS#startActivityAsUser ……</p>
+  </li>
+  <li>
+    <p>ActivityThread#H#handleMessage ……</p>
+  </li>
+  <li>ActivityThread#handleLaunchActivity
+    <ul>
+      <li>ActivityThread#performLaunchActivity</li>
+      <li>Instrumentation#callActivityOnCreate</li>
+      <li>Activity#performCreate</li>
+      <li>Activity#onCreate</li>
+    </ul>
+  </li>
+  <li>ActivityThread#handleResumeActivity
+    <ul>
+      <li>WindowManagerImpl#addView</li>
+      <li>WindowManagerGlobal#addView</li>
+      <li>ViewRootImpl#setView</li>
+      <li>ViewRootImpl#requestLayout</li>
+      <li>ViewRootImpl#scheduleTraversals</li>
+      <li>mChoreographer.postCallback( … , mTraversalRunnable , …)</li>
+      <li>ViewRootImpl#TraversalRunnable.run</li>
+      <li>ViewRootImpl#doTraversal</li>
+      <li>ViewRootImpl#performTraversals
+        <ul>
+          <li>ViewRootImpl#performMeasure -&gt; DecorView#measure</li>
+          <li>ViewRootImpl#performLayout -&gt; DecorView#layout</li>
+          <li>ViewRootImpl#performDraw -&gt; draw -&gt; drawSoftware -&gt; DecorView#draw</li>
+        </ul>
+      </li>
+    </ul>
+  </li>
+</ul>
+
+:ET

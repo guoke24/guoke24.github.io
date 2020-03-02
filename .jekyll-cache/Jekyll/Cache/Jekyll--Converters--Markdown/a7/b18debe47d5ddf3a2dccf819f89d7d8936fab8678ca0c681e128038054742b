@@ -1,0 +1,5 @@
+I"<h1 id="前言">前言</h1>
+<p>由该文章： [[Activity 的根视图 – DecorView 的构成 ]] ，可知，
+一个 Activity 持有 一个 PhoneWindow 类对象，
+PhoneWindow 类对象内的 mDecor 变量，就是 Activity 的根视图 DecorView 实例。</p>
+:ET

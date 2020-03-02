@@ -1,0 +1,39 @@
+I"<
+<blockquote>
+  <p>系统版本：MacOS Mojave 10.14 (18A2063)<br />
+预备软件工具：git<br />
+使用外接固态硬盘，将硬盘格式化为：Mac OS 拓展（区分大小写，日志式）<br />
+编译源码需要硬盘文件系统支持大小写敏感，不然会报错。</p>
+</blockquote>
+
+<h1 id="第一步下载mokee定制repo">第一步，下载mokee定制repo</h1>
+<p><a href="https://bbs.mokeedev.com/t/topic/21">参考文章</a></p>
+
+<h1 id="第二步下载源码">第二步，下载源码</h1>
+<p><a href="https://bbs.mokeedev.com/t/topic/627">参考文章</a></p>
+
+<p>repo init：用于下载整个项目的清单文件，并通过 -b 后的参数，决定分支（8.0 or 9.0等）<br />
+repo sync：真同步代码，根据清单文件为每个子项目配置的源，逐个去下载子项目，个人猜测用 git clone；<br />
+		   其中还可以给每个子项目修改源，避免有些指向谷歌的源不可用。</p>
+
+<p>我下载了9.0分支，命令：</p>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+</pre></td><td class="rouge-code"><pre>repo init -u https://github.com/MoKee/android -b mkp --depth 1
+</pre></td></tr></tbody></table></code></pre></div></div>
+<p>mkp：指 Android9.0，同理 mko 就是 Android8.0。<br />
+depth：用于指定克隆深度，为1即表示只克隆最近一次commit。</p>
+
+<p>repo sync 过程中遇到的错误：<br />
+错误1:</p>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+</pre></td><td class="rouge-code"><pre>error: Cannot fetch platform/prebuilts/gradle-plugin from https://android.googlesource.com/platform/prebuilts/gradle-plugin
+</pre></td></tr></tbody></table></code></pre></div></div>
+<p>原因是连接不了谷歌服务器，我的解决办法是使用清华大学的镜像. 
+具体操作：修改用户根目录.bash_profile文件（我的用户根目录没有.bashrc文件），添加：</p>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+</pre></td><td class="rouge-code"><pre>export MK_AOSP_REMOTE=tuna
+</pre></td></tr></tbody></table></code></pre></div></div>
+<p>然后执行命令使生效：source ~/.bash_profile. 
+之后再去repo sync，原本从谷歌下载的子模块，都会转到从清华大学的镜像下载. 
+到此，错误1 解决！</p>
+:ET

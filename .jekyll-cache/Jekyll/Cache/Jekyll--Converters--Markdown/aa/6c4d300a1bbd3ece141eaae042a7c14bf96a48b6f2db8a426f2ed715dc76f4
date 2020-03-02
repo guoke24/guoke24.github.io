@@ -1,0 +1,1743 @@
+I"��<h1 id="前言">前言</h1>
+
+<p>之所以会研究这块内容，是因为前段时间接手的一个验签的项目，正是遵循了 Android V2 签名方案，于是就去研究了一部分 Android 原生的 V2 加签和验签的源码，现在趁着比较空闲，就把 Android 原生的 V2 加签和验签的源码梳理一番。本篇文章将研究 <strong>加签</strong> 这一块的源码。</p>
+
+<h1 id="v2-签名方案的原理">V2 签名方案的原理</h1>
+
+<p>首先，找到谷歌官方的文档，需要翻墙：<br />
+<a href="https://source.android.com/security/apksigning/v2">APK 签名方案 v2</a><br />
+辅助理解：<br />
+<a href="https://www.jianshu.com/p/dc320629bf9d">Android V2签名机制以及ApkSignerV2签名源码解析</a><br />
+<a href="https://blog.csdn.net/freekiteyu/article/details/84849651">一篇文章看明白 Android v1 &amp; v2 签名机制</a><br /></p>
+
+<p>v2 签名的整体流程概括：<br />
+一个 APK 文件其实就是一个 ZIP 格式的文件，而一个 ZIP 格式的文件分为三部分：<br />
+<strong>内容去，中央目录区，结尾区</strong>。<br />
+<strong>结尾区</strong> 内记录了 <strong>中央目录区</strong> 在文件中的偏移量。<br />
+所谓的 V2 签名方案，就是根据某种规则，产生签名块，再把签名块插入到 <strong>内容区和中央目录区</strong> 之间，<br />
+然后再更新 <strong>结尾区</strong> 内的中央目录区的偏移量的值。<br /></p>
+
+<p>借用官方的图，如下：<br />
+<img src="http://guoke24.top/img/apk-before-after-signing.png" alt="" /><br /></p>
+
+<p>如图所示，红色那一块代表了 APK 签名块。<br />
+用类json格式表示如下：</p>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+</pre></td><td class="rouge-code"><pre>apk
+{
+    beforeCentralDir,
+    apkSigningBlock,// apk 签名分块
+    centralDir,
+    eocd,
+}
+</pre></td></tr></tbody></table></code></pre></div></div>
+
+<p>接下来说一下 <strong>签名块</strong> 的内部结构。<br />
+引用官方文档中描述 <strong>签名块</strong> 结构的一段话：</p>
+<blockquote>
+  <p>格式<br />
+“APK 签名分块”的格式如下（所有数字字段均采用小端字节序）：</p>
+  <ul>
+    <li>size of block，以字节数（不含此字段）计 (uint64)</li>
+    <li>带 uint64 长度前缀的“ID-值”对序列：
+      <ul>
+        <li>ID (uint32)</li>
+        <li>value（可变长度：“ID-值”对的长度 - 4 个字节）</li>
+      </ul>
+    </li>
+    <li>size of block，以字节数计 - 与第一个字段相同 (uint64)</li>
+    <li>magic“APK 签名分块 42”（16 个字节）</li>
+  </ul>
+</blockquote>
+
+<p>用类json格式表示如下：</p>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+</pre></td><td class="rouge-code"><pre>apk
+{
+    beforeCentralDir,
+    apkSigningBlock,// apk 签名分块
+		{
+		    blockSizeFieldValue,
+		    pairSizeFieldValue,
+		    APK_SIGNATURE_SCHEME_V2_BLOCK_ID,
+		    apkSignatureSchemeV2Block，// value 值，内含 “ID-值”对，V2 分块
+		    blockSizeFieldValue,
+		    APK_SIGNING_BLOCK_MAGIC,
+		}
+    centralDir,
+    eocd,
+}
+</pre></td></tr></tbody></table></code></pre></div></div>
+<p>接下来说一下 <strong>签名块 V2 分块</strong> 的内部结构。<br />
+引用官方文档中描述 <strong>签名块 V2 分块</strong> 结构的一段话：</p>
+<blockquote>
+  <p>格式<br />
+“APK 签名方案 v2 分块”存储在“APK 签名分块”内，ID 为 0x7109871a。<br />
+“APK 签名方案 v2 分块”的格式如下（所有数字值均采用小端字节序，所有带长度前缀的字段均使用 uint32 值表示长度）：<br /></p>
+  <ul>
+    <li>带长度前缀的 signer（带长度前缀）序列：<br />
+      <ul>
+        <li>带长度前缀的 signed data：<br />
+          <ul>
+            <li>带长度前缀的 digests（带长度前缀）序列：<br />
+              <ul>
+                <li>signature algorithm ID (uint32)<br /></li>
+                <li>（带长度前缀）digest - 请参阅受完整性保护的内容<br /></li>
+              </ul>
+            </li>
+            <li>带长度前缀的 X.509 certificates 序列：<br />
+              <ul>
+                <li>带长度前缀的 X.509 certificate（ASN.1 DER 形式）<br /></li>
+              </ul>
+            </li>
+            <li>带长度前缀的 additional attributes（带长度前缀）序列：<br />
+              <ul>
+                <li>ID (uint32)<br /></li>
+                <li>value（可变长度：附加属性的长度 - 4 个字节）<br /></li>
+              </ul>
+            </li>
+          </ul>
+        </li>
+        <li>带长度前缀的 signatures（带长度前缀）序列：<br />
+          <ul>
+            <li>signature algorithm ID (uint32)<br /></li>
+            <li>signed data 上带长度前缀的 signature<br /></li>
+          </ul>
+        </li>
+        <li>带长度前缀的 public key（SubjectPublicKeyInfo，ASN.1 DER 形式）<br /></li>
+      </ul>
+    </li>
+  </ul>
+</blockquote>
+
+<p><strong>签名块 v2 分块</strong> 用类json格式表示如下：</p>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+</pre></td><td class="rouge-code"><pre>apkSignatureSchemeV2Block，// value 值，内含 “ID-值”对，V2 分块  
+{
+	len-signers[len-signer]
+	{
+		signer
+		{
+			len-signedData, //签名数据
+			{
+				len-digests["len-(签名算法ID-(len-摘要))"],  
+				len-certificates["len-certificate"], //从第一个 certificate 内的公钥，对应签名的私钥
+				len-additional_attributes["len-(ID-(len-attribute))"],  
+			}
+			len-signatures["len-(签名算法ID-(len-signature))"], //签名值 
+			len-publicKey // 公钥，第一个 certificate 内取到的 
+		}
+}
+</pre></td></tr></tbody></table></code></pre></div></div>
+<p>其中，“len-”表示带长度前缀的意思，“signers[signer]”表示： signer 序列，所以，结合起来：<br />
+“len-signers[signer]”表示：带长度前缀的 signer 序列；<br />
+“len-signers[len-signer]”表示：带长度前缀的 signer（带长度前缀）序列；<br />
+换句话说，signers[signer] 就是一个数组（也称序列），内部元素为 signer，接着给每个内部元素加上长度前缀，就有一个新的数组：<br />
+signers[len-signer]，内部元素为 len-signer，如果再给该新的数组加一个长度前缀，就有：<br />
+len-signers[len-signer]。<br />
+<strong>签名块 v2 分块</strong>,本质上就是一个 <strong>带长度前缀的序列（数组）</strong>，<br />
+其内部每个元素为 <strong>带长度前缀的 signer</strong>，即其内部每个元素为 <strong>len-signer</strong>。<br />
+<br />
+<strong>补充说明：在上述的类json格式的代码中，“[]”表示一个序列（数组），内含n个同类型元素,“{}”表示一个结构体，内部的元素都只有一个。</strong><br />
+<br /></p>
+<ul>
+  <li>signer 的内部结构，包含个三元素：len-signedData，len-signatures，len-publicKey；<br />
+    <ul>
+      <li>第一个元素 len-signedData ，签名数据，其内部结构比较复杂，我们慢慢将之拆分：
+        <ul>
+          <li>signedData 内部的第一个元素，它的格式为 len-digests，即带长度前缀的摘要序列（数组），<br />
+其内部含多个相同格式的元素 [“len-(签名算法ID-(len-摘要))”]，即带长度前缀的“ID-value”对，<br />
+其 ID 是 签名算法ID，value 是 len-摘要，即带长度前缀的摘要，<br />
+到这我们就可以简单理解为，digests 每个内部元素就是一个 “算法ID-摘要” 的映射对；<br />
+为何是这种结构，后续源码分析的时候会讲到。而此处的摘要，是未签名的 APK 在对应的算法下，计算出来的摘要值。</li>
+          <li>signedData 内部的第二个元素，它的格式为 len-certificates，带长度前缀的证书序列（数组），<br />
+其内部含多个相同格式的元素 [“len-certificate”]，即带长度前缀的证书；</li>
+          <li>signedData 内部的第三个元素，它的格式为 len-additional_attributes，即带长度前缀的附加数据序列（数组），<br />
+其内部元素的结构跟 signedData 内部的第一个元素类似。而且 Android 原生的 V2 签名不带数附加据，后续源码会讲到。</li>
+        </ul>
+      </li>
+      <li>第二个元素 len-signatures，签名值序列，结构和 len-digests[“len-(签名算法ID-(len-摘要))”] 类似，为[“len-(签名算法ID-(len-signature))”]，此处的 signature，是在对应算法下，对不带前缀的 signedData 签名得到的。</li>
+      <li>第三个元素 len-publicKey，带长度前缀的公钥，简单结构。</li>
+    </ul>
+  </li>
+</ul>
+
+<p>再来一张表格图示：<br />
+<img src="http://guoke24.top/img/v2签名块表格图示.png" alt="" /><br /></p>
+
+<p>最终，APK 的总体结构可以表示如下：</p>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+</pre></td><td class="rouge-code"><pre>apk
+{
+    beforeCentralDir,
+    apkSigningBlock,// apk 签名分块
+	{
+		blockSizeFieldValue,
+		pairSizeFieldValue,
+		APK_SIGNATURE_SCHEME_V2_BLOCK_ID,
+		apkSignatureSchemeV2Block，// value 值，内含 “ID-值”对，V2 分块
+		{
+			len-signers[len-signer]
+			{
+				signer
+				{
+					len-signedData,
+					{
+						len-digests["len-(签名算法ID-(len-摘要))"],
+						len-certificates["len-certificate"],
+						len-new byte[0],
+					}
+					len-signatures["len-(签名算法ID-(len-signature))"],
+					len-publicKey
+				}
+			}
+		}
+		blockSizeFieldValue,
+		APK_SIGNING_BLOCK_MAGIC,
+	}
+    centralDir,
+    eocd,
+}
+</pre></td></tr></tbody></table></code></pre></div></div>
+
+<p>到此，可以简单的说，V2 分块内，有多个 singer，而每个 signer 内又有多个摘要，多个证书和多个签名值。<br />
+为什么是这样的结构呢？那就得看源码才能找到答案了。<br /></p>
+
+<h1 id="v2-加签的源码实现">V2 加签的源码实现</h1>
+
+<p>源码在此链接可以看到：<a href="https://android.googlesource.com/platform/build/+/dd910c5/tools/signapk/src/com/android/signapk/ApkSignerV2.java">V2加签源码</a><br /></p>
+
+<p>起始函数为 sign ；相关代码如下：</p>
+<h3 id="代码段1">代码段1:</h3>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39
+40
+41
+42
+43
+44
+45
+46
+47
+48
+49
+50
+51
+52
+53
+54
+55
+56
+57
+58
+59
+60
+61
+62
+63
+64
+65
+66
+67
+68
+69
+</pre></td><td class="rouge-code"><pre>    /**
+     * Signs the provided APK using APK Signature Scheme v2 and returns the signed APK as a list of
+     * consecutive chunks.
+     *
+     * ......
+     *
+     * @param inputApk contents of the APK to be signed. The APK starts at the current position
+     *        of the buffer and ends at the limit of the buffer.
+     * @param signerConfigs signer configurations, one for each signer.
+     *
+     * ......
+     */
+    public static ByteBuffer[] sign(
+            ByteBuffer inputApk,
+            List&lt;SignerConfig&gt; signerConfigs)
+            throws ApkParseException, InvalidKeyException, SignatureException {
+
+        ......
+
+        // 1-1
+        // Create ByteBuffers holding the contents of everything before ZIP Central Directory,
+        // ZIP Central Directory, and ZIP End of Central Directory.
+        inputApk.clear();
+        ByteBuffer beforeCentralDir = getByteBuffer(inputApk, centralDirOffset);
+        ByteBuffer centralDir = getByteBuffer(inputApk, eocdOffset - centralDirOffset);
+        // Create a copy of End of Central Directory because we'll need modify its contents later.
+        byte[] eocdBytes = new byte[inputApk.remaining()];
+        inputApk.get(eocdBytes);
+        ByteBuffer eocd = ByteBuffer.wrap(eocdBytes);
+        eocd.order(inputApk.order());
+
+        // 1-2
+        // Figure which which digests to use for APK contents.
+        Set&lt;Integer&gt; contentDigestAlgorithms = new HashSet&lt;&gt;();
+        for (SignerConfig signerConfig : signerConfigs) {
+            for (int signatureAlgorithm : signerConfig.signatureAlgorithms) {
+                contentDigestAlgorithms.add(
+                        getSignatureAlgorithmContentDigestAlgorithm(signatureAlgorithm));
+            }
+        }
+
+        // 1-3
+        // Compute digests of APK contents.
+        Map&lt;Integer, byte[]&gt; contentDigests; // digest algorithm ID -&gt; digest
+        try {
+            contentDigests =
+                    computeContentDigests(
+                            contentDigestAlgorithms,
+                            new ByteBuffer[] {beforeCentralDir, centralDir, eocd});
+        } catch (DigestException e) {
+            throw new SignatureException("Failed to compute digests of APK", e);
+        }
+
+        // 1-4
+        // Sign the digests and wrap the signatures and signer info into an APK Signing Block.
+        ByteBuffer apkSigningBlock =
+                ByteBuffer.wrap(generateApkSigningBlock(signerConfigs, contentDigests));
+
+		......
+
+		// 1-5
+        // Insert APK Signing Block immediately before the ZIP Central Directory.
+        return new ByteBuffer[] {
+                beforeCentralDir,
+                apkSigningBlock,
+                centralDir,
+                eocd,
+        };
+    }
+</pre></td></tr></tbody></table></code></pre></div></div>
+
+<p>首先看该函数的入参：<br />
+<code class="highlighter-rouge">ByteBuffer inputApk</code> 就是待签名apk的字节数组，被包装成了 ByteBuffer，目的是便于进行读取和复制等操作；<br />
+<code class="highlighter-rouge">List&lt;SignerConfig&gt; signerConfigs</code> 就是签名者配置信息集，这意味着签名者可能不止一个。<br />
+接着看 SignerConfig 类的源码：</p>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+</pre></td><td class="rouge-code"><pre>    /**
+     * Signer configuration.
+     */
+    public static final class SignerConfig {
+        /** Private key. */
+        public PrivateKey privateKey;
+        /**
+         * Certificates, with the first certificate containing the public key corresponding to
+         * {@link #privateKey}.
+         */
+        public List&lt;X509Certificate&gt; certificates;
+        /**
+         * List of signature algorithms with which to sign (see {@code SIGNATURE_...} constants).
+         */
+        public List&lt;Integer&gt; signatureAlgorithms;
+    }
+</pre></td></tr></tbody></table></code></pre></div></div>
+<p>可知，每个 <strong>签名者配置信息</strong> 包括：私钥，证书序列，签名算法ID的序列。<br /></p>
+
+<p>接着看，<br />
+注释1-1处，从入参的 inputApk 提取出了三部分：beforeCentralDir、centralDir、eocd，都是 ByteBuffer 类型。</p>
+
+<p>注释1-2处，通过两次遍历，把入参的 signerConfigs 的所有的签名算法，通过函数 getSignatureAlgorithmContentDigestAlgorithm 转换成对应的摘要算法，添加到集合 contentDigestAlgorithms 去了。<br />
+函数 getSignatureAlgorithmContentDigestAlgorithm 的源码如下：</p>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+</pre></td><td class="rouge-code"><pre>    private static int getSignatureAlgorithmContentDigestAlgorithm(int sigAlgorithm) {
+        switch (sigAlgorithm) {
+            case SIGNATURE_RSA_PSS_WITH_SHA256:
+            case SIGNATURE_RSA_PKCS1_V1_5_WITH_SHA256:
+            case SIGNATURE_ECDSA_WITH_SHA256:
+            case SIGNATURE_DSA_WITH_SHA256:
+                return CONTENT_DIGEST_CHUNKED_SHA256;
+            case SIGNATURE_RSA_PSS_WITH_SHA512:
+            case SIGNATURE_RSA_PKCS1_V1_5_WITH_SHA512:
+            case SIGNATURE_ECDSA_WITH_SHA512:
+            case SIGNATURE_DSA_WITH_SHA512:
+                return CONTENT_DIGEST_CHUNKED_SHA512;
+            default:
+                throw new IllegalArgumentException(
+                        "Unknown signature algorithm: 0x"
+                                + Long.toHexString(sigAlgorithm &amp; 0xffffffff));
+        }
+    }
+</pre></td></tr></tbody></table></code></pre></div></div>
+<p>由此可知，签名算法有8种，摘要算法只有两种：SHA256 和 SHA512。</p>
+
+<p>注释1-3，计算并构造 “摘要算法ID - 分块摘要序列的摘要” 的 映射对，存储到变量 contentDigests 中。</p>
+
+<p>注释1-4，构造 apk 签名分块。</p>
+
+<p>注释1-5，构造并返回带 V2 签名的 APK。<br />
+到此，对一个 APK 加上 V2 签名的流程就走完了。其中注释1-3和注释1-4中的代码逻辑才是核心，将在下面展开讲解。<br /></p>
+
+<h1 id="计算-apk-的摘要的源码解析">计算 apk 的摘要的源码解析</h1>
+<p>在代码段1的注释1-3处，computeContentDigests 函数返回的 “摘要算法ID - 分块摘要序列的摘要” 的 映射对，存储到变量 contentDigests 中。<br />
+那么这些映射对是怎么计算的呢？我们去看函数 computeContentDigests 的源码：</p>
+<h3 id="代码段2">代码段2:</h3>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39
+40
+41
+42
+43
+44
+45
+46
+47
+48
+49
+50
+51
+52
+53
+54
+55
+56
+57
+58
+59
+60
+61
+62
+63
+64
+65
+66
+67
+68
+69
+70
+71
+72
+73
+74
+75
+76
+77
+78
+79
+80
+81
+82
+83
+84
+85
+86
+87
+88
+89
+90
+91
+92
+93
+94
+95
+96
+97
+98
+99
+100
+101
+102
+103
+104
+105
+106
+107
+108
+109
+110
+111
+112
+113
+114
+115
+116
+117
+118
+119
+120
+121
+122
+123
+124
+125
+126
+127
+128
+129
+130
+131
+132
+133
+134
+135
+136
+137
+138
+139
+140
+141
+142
+143
+144
+145
+146
+147
+148
+149
+150
+151
+152
+153
+154
+155
+156
+157
+</pre></td><td class="rouge-code"><pre>    private static Map&lt;Integer, byte[]&gt; computeContentDigests(
+            Set&lt;Integer&gt; digestAlgorithms,
+            ByteBuffer[] contents) throws DigestException {
+
+        // For each digest algorithm the result is computed as follows:
+        // 1. Each segment of contents is split into consecutive chunks of 1 MB in size.
+        //    The final chunk will be shorter iff the length of segment is not a multiple of 1 MB.
+        //    No chunks are produced for empty (zero length) segments.
+        // 2. The digest of each chunk is computed over the concatenation of byte 0xa5, the chunk's
+        //    length in bytes (uint32 little-endian) and the chunk's contents.
+        // 3. The output digest is computed over the concatenation of the byte 0x5a, the number of
+        //    chunks (uint32 little-endian) and the concatenation of digests of chunks of all
+        //    segments in-order.
+
+        // 引述官网的中文翻译：
+        // a. 第 1、3 和 4 部分的摘要采用以下计算方式，类似于两级 Merkle 树。
+        // b. 每个部分都会被拆分成多个大小为 1 MB（220 个字节）的连续块。每个部分的最后一个块可能会短一些。
+        // c. 每个块的摘要均通过字节 0xa5 的连接、块的长度（采用小端字节序的 uint32 值，以字节数计）和块的内容进行计算。
+        // d. 顶级摘要通过字节 0x5a 的连接、块数（采用小端字节序的 uint32 值）以及块的摘要的连接（按照块在 APK 中显示的顺序）进行计算。
+        // e. 摘要以分块方式计算，以便通过并行处理来加快计算速度。
+
+        // 大致思路：
+        // 因为存在多种摘要算法，这里的做法是，分别采用每一种算法：
+        // 对入参 contents 的所有分块逐个计算摘要，然后逐个相连构成一个*分块摘要序列*，
+        // 接着再对该*分块摘要序列*计算摘要，得到*分块摘要序列的摘要*
+        // 最后，以 "算法ID-分块摘要序列的摘要" 的形式存到 map 并返回。
+
+        // 入参解析：
+        // digestAlgorithms 就是摘要算法的集合，其实就是两种摘要算法：SHA256 和 SHA512；
+        // contents 就是 new ByteBuffer[] {beforeCentralDir, centralDir, eocd}。即要计算摘要的内容。
+
+        int chunkCount = 0;
+        for (ByteBuffer input : contents) { // 遍历 {beforeCentralDir, centralDir, eocd}
+            chunkCount += getChunkCount(input.remaining(), CONTENT_DIGESTED_CHUNK_MAX_SIZE_BYTES/*1MB*/);// 1MB = 1024KB =1024*1024B
+            // 以每个小块1MB的标准，计算一共可以拆分成多少个小块
+        }
+        final Map&lt;Integer, byte[]&gt; digestsOfChunks = new HashMap&lt;&gt;(digestAlgorithms.size());
+        for (int digestAlgorithm : digestAlgorithms) {
+            // 遍历算法集，即 SHA256 和 SHA512；
+
+            // 当前算法下，每个1MB分块计算出的摘要的字节数
+            int digestOutputSizeBytes = getContentDigestAlgorithmOutputSizeBytes(digestAlgorithm);
+
+            // 新建一个字节数组 表示：
+            // 当前算法下，所有分块的摘要的合并集，又称为：分块摘要序列
+            // 同时预留了前5个字节来存储：一字节的0x5a 和 四字节的度前缀
+            byte[] concatenationOfChunkCountAndChunkDigests =
+                    new byte[5 + chunkCount * digestOutputSizeBytes];// 其大小为：一字节（0x5a） + 四字节（分块数，也称长度前缀） + 所有分块摘要的字节数总和
+            // 下面把变量 concatenationOfChunkCountAndChunkDigests 称为 *带块数的分块摘要序列*
+
+            // 设置 *带块数的分块摘要序列*
+            // 的首字节为 0x5a
+            concatenationOfChunkCountAndChunkDigests[0] = 0x5a;
+
+            // 设置 *分块带块数的分块摘要序列* 中
+            // 表示块数的4个字节为小端序，即第二到第五个字节，下标是1～4。
+            setUnsignedInt32LittleEngian(
+                    chunkCount, concatenationOfChunkCountAndChunkDigests, 1);
+
+            // "算法ID - 带块数的分块摘要序列" 映射对，也称键值对
+            // 存到变量 digestsOfChunks 中
+            digestsOfChunks.put(digestAlgorithm, concatenationOfChunkCountAndChunkDigests);
+
+            // 小结：每一种算法，都会对整个apk的分块序列进行一次 *摘要计算*
+        }
+
+        // ======用于存储摘要值的相关变量已经创建完毕，接下来开始计算摘要======
+        
+        int chunkIndex = 0; // 分块的下标
+        byte[] chunkContentPrefix = new byte[5]; // 分块前缀，0xa5 + 四字节的块数
+        chunkContentPrefix[0] = (byte) 0xa5;// 分块前缀的第一个字节
+        // Optimization opportunity: digests of chunks can be computed in parallel.
+        for (ByteBuffer input : contents) { // 遍历 APK 的三部分
+            while (input.hasRemaining()) { 
+                int chunkSize =
+                        Math.min(input.remaining(), CONTENT_DIGESTED_CHUNK_MAX_SIZE_BYTES/*1MB*/);
+                final ByteBuffer chunk = getByteBuffer(input, chunkSize);
+                // 到此可知，对 APk 的每一部分，循环的取出 1MB的小块，用于摘要计算
+                
+                for (int digestAlgorithm : digestAlgorithms) {
+                    // 遍历算法集，每个算法都算一遍摘要，即 SHA256 和 SHA512；
+
+                    String jcaAlgorithmName =
+                            getContentDigestAlgorithmJcaDigestAlgorithm(digestAlgorithm);
+                    MessageDigest md;
+                    try {
+                        md = MessageDigest.getInstance(jcaAlgorithmName);// 根据摘要算法，构建摘要计算的执行者 md
+                    } catch (NoSuchAlgorithmException e) {
+                        throw new DigestException(
+                                jcaAlgorithmName + " MessageDigest not supported", e);
+                    }
+                    // Reset position to 0 and limit to capacity. Position would've been modified
+                    // by the preceding iteration of this loop. NOTE: Contrary to the method name,
+                    // this does not modify the contents of the chunk.
+                    chunk.clear();
+                    setUnsignedInt32LittleEngian(chunk.remaining(), chunkContentPrefix, 1);
+                    md.update(chunkContentPrefix);// 分块前缀加入md，准备计算
+                    md.update(chunk);// 分块纳入md，准备计算
+
+                    // 获取 当前算法对应的 *带块数的分块摘要序列*，计算结果将存于此变量
+                    byte[] concatenationOfChunkCountAndChunkDigests =
+                            digestsOfChunks.get(digestAlgorithm);
+
+                    // 获取 预期的*摘要字节数*
+                    int expectedDigestSizeBytes =
+                            getContentDigestAlgorithmOutputSizeBytes(digestAlgorithm);
+
+                    // 获取 实际的*摘要字节数*
+                    // 且将摘要结果存于变量 *带块数的分块摘要序列*，即 concatenationOfChunkCountAndChunkDigests
+                    int actualDigestSizeBytes =
+                            md.digest(
+                                    concatenationOfChunkCountAndChunkDigests,
+                                    5 + chunkIndex * expectedDigestSizeBytes,
+                                    expectedDigestSizeBytes);
+                            // 这里计算对象的是上面 update 进来的 chunkContentPrefix 和 chunk 的摘要
+                            // 并且把摘要数据写入到 concatenationOfChunkCountAndChunkDigests 这个字节数组的指定位置
+                            // 其实就是根据 chunkIndex 累加，逐个往后血、写
+
+                    // 预期摘要字节数 必须等于 实际摘要字节数，否则抛异常
+                    if (actualDigestSizeBytes != expectedDigestSizeBytes) {
+                        throw new DigestException(
+                                "Unexpected output size of " + md.getAlgorithm()
+                                        + " digest: " + actualDigestSizeBytes);
+                    }
+                }
+                chunkIndex++;
+            }
+        }
+
+        // 计算结果（即*带块数的分块摘要序列*）
+        // 存于变量 concatenationOfChunkCountAndChunkDigests，
+        // 而该变量存于 digestsOfChunks
+        //====== 分块摘要计算结束，得到*带块数的分块摘要序列* ======          
+
+        Map&lt;Integer, byte[]&gt; result = new HashMap&lt;&gt;(digestAlgorithms.size());
+
+        for (Map.Entry&lt;Integer, byte[]&gt; entry : digestsOfChunks.entrySet()) {
+            int digestAlgorithm = entry.getKey();
+            byte[] concatenationOfChunkCountAndChunkDigests = entry.getValue();
+            String jcaAlgorithmName = getContentDigestAlgorithmJcaDigestAlgorithm(digestAlgorithm);
+            MessageDigest md;
+            try {
+                md = MessageDigest.getInstance(jcaAlgorithmName);
+            } catch (NoSuchAlgorithmException e) {
+                throw new DigestException(jcaAlgorithmName + " MessageDigest not supported", e);
+            }
+            // 此处对 *带块数的分块摘要序列* 这整个变量，又进行来一次摘要计算
+            // 得到 摘要算法ID - 带块数的分块摘要序列的摘要，
+            // 简称 算法ID - 分块摘要序列的摘要
+            // 存于 result
+            result.put(digestAlgorithm, md.digest(concatenationOfChunkCountAndChunkDigests));
+        }
+
+        //====== 分块摘要序列的摘要计算结束，得到 *分块摘要序列的摘要* ======  
+
+        return result; // “摘要算法ID - 分块摘要序列的摘要”的 Map
+    }
+</pre></td></tr></tbody></table></code></pre></div></div>
+<p>在上述源码段中已经带有详细的注释，整个函数的逻辑主要分为两步：<br />
+第一步：得到 <strong>带块数的分块摘要序列</strong>，简称 <strong>分块摘要序列</strong><br />
+第二步：得到 <strong>带块数的分块摘要序列的摘要</strong>，简称 <strong>分块摘要序列的摘要</strong><br />
+接着附上两张图示，来展示摘要计算的大致思路，第一张为官方文档的图：
+<img src="http://guoke24.top/img/apk-integrity-protection.png" alt="" /><br />
+<img src="http://guoke24.top/img/计算APK的摘要.png" alt="" /><br />
+由上述代码段和图示，我们大致清楚了对一个 APK 摘要的双重计算的过程，得到的结果就是 <strong>分块摘要序列的分块</strong>。<br /></p>
+
+<h1 id="构造-apk-签名分块">构造 apk 签名分块</h1>
+<p>再回顾一下代码段1的注释1-4处的代码：</p>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+</pre></td><td class="rouge-code"><pre>    // Sign the digests and wrap the signatures and signer info into an APK Signing Block.
+    ByteBuffer apkSigningBlock =
+        ByteBuffer.wrap(generateApkSigningBlock(signerConfigs, contentDigests));
+
+</pre></td></tr></tbody></table></code></pre></div></div>
+
+<p>generateApkSigningBlock 函数返回的已经是完整的 apk 签名分块，ByteBuffer.wrap 仅仅是做一个包装。
+接着看 generateApkSigningBlock 函数的源码：</p>
+<h3 id="代码段3完整的-apk-签名分块">代码段3，完整的 apk 签名分块:</h3>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+</pre></td><td class="rouge-code"><pre>    private static byte[] generateApkSigningBlock(
+            List&lt;SignerConfig&gt; signerConfigs,
+            Map&lt;Integer, byte[]&gt; contentDigests) throws InvalidKeyException, SignatureException {
+
+        // 3-1
+        // 此处入参的是 contentDigests，即 map&lt; 算法ID - 分块摘要序列的摘要 &gt;
+        byte[] apkSignatureSchemeV2Block =
+                generateApkSignatureSchemeV2Block(signerConfigs, contentDigests);
+                // 该函数 会产生 是原生V2签名分块value值
+
+        // 3-2
+        // 此处的入参的 apkSignatureSchemeV2Block 是原生V2签名分块value值
+        return generateApkSigningBlock(apkSignatureSchemeV2Block);
+        // 此处返回的已经是完整的 apk 签名分块
+        // 即加上前后size，prelen，ID，magic，
+    }
+</pre></td></tr></tbody></table></code></pre></div></div>
+
+<p>代码里的注释3-1和3-2都有中提到，变量 apkSignatureSchemeV2Block 是原生V2签名分块value值，<br />
+回顾一下 V2 签名 APk 的总体结构：</p>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+</pre></td><td class="rouge-code"><pre>apk
+{
+    beforeCentralDir,
+    apkSigningBlock,// apk 签名分块
+	{
+		blockSizeFieldValue,
+		pairSizeFieldValue,
+		APK_SIGNATURE_SCHEME_V2_BLOCK_ID,
+		apkSignatureSchemeV2Block，// value 值，内含 “ID-值”对，V2 分块
+		{
+			len-signers[len-signer]
+			{
+				signer
+				{
+					len-signedData,
+					{
+						len-digests["len-(签名算法ID-(len-摘要))"],
+						len-certificates["len-certificate"],
+						len-new byte[0],
+					}
+					len-signatures["len-(签名算法ID-(len-signature))"],
+					len-publicKey
+				}
+			}
+		}
+		blockSizeFieldValue,
+		APK_SIGNING_BLOCK_MAGIC,
+	}
+    centralDir,
+    eocd,
+}
+</pre></td></tr></tbody></table></code></pre></div></div>
+
+<p>可以看到，上述代码段3中提到的 apkSignatureSchemeV2Block ，正是此处的 apkSignatureSchemeV2Block。<br />
+继续看代码段3的注释3-1处，调用了函数 generateApkSignatureSchemeV2Block，返回值 apkSignatureSchemeV2Block。</p>
+<h3 id="代码段4v2-签名分块">代码段4，V2 签名分块:</h3>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+</pre></td><td class="rouge-code"><pre>    private static byte[] generateApkSignatureSchemeV2Block(
+            List&lt;SignerConfig&gt; signerConfigs,
+            Map&lt;Integer, byte[]&gt; contentDigests) throws InvalidKeyException, SignatureException {
+        // FORMAT:
+        // * length-prefixed sequence of length-prefixed signer blocks.
+        List&lt;byte[]&gt; signerBlocks = new ArrayList&lt;&gt;(signerConfigs.size());
+        int signerNumber = 0;
+        for (SignerConfig signerConfig : signerConfigs) {
+            signerNumber++;
+            byte[] signerBlock;
+            try {
+                signerBlock = generateSignerBlock(signerConfig, contentDigests); //4-1
+            } catch (InvalidKeyException e) {
+                throw new InvalidKeyException("Signer #" + signerNumber + " failed", e);
+            } catch (SignatureException e) {
+                throw new SignatureException("Signer #" + signerNumber + " failed", e);
+            }
+            signerBlocks.add(signerBlock);
+        }
+        return encodeAsSequenceOfLengthPrefixedElements( //4-2
+                new byte[][] {
+                        encodeAsSequenceOfLengthPrefixedElements(signerBlocks), //4-3
+                });
+    }
+</pre></td></tr></tbody></table></code></pre></div></div>
+<p>遍历 signerConfigs，每个 signerConfigs 都构建一个对应的 signerBlock，最终添加到变量 signerBlocks。<br />
+所以说，有多少个签名者，就有多少个 signerBlock。<br />
+而 signerBlock 正是对应了 apkSignatureSchemeV2Block 的类json结构中的 signer。<br />
+现在把 apkSignatureSchemeV2Block 的类json结构单独拎出来：</p>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+</pre></td><td class="rouge-code"><pre>apkSignatureSchemeV2Block，// value 值，内含 “ID-值”对，V2 分块  
+{
+	len-signers[len-signer]
+	{
+		signer
+		{
+			len-signedData, //签名数据
+			{
+				len-digests["len-(签名算法ID-(len-摘要))"],  
+				len-certificates["len-certificate"], //从第一个 certificate 内的公钥，对应签名的私钥
+				len-additional_attributes["len-(ID-(len-attribute))"],  
+			}
+			len-signatures["len-(签名算法ID-(len-signature))"], //签名值 
+			len-publicKey // 公钥，第一个 certificate 内取到的 
+		}
+    }
+}
+</pre></td></tr></tbody></table></code></pre></div></div>
+
+<p>接着看代码段4的注释4-1，构造 signerBlock，调用了函数 generateSignerBlock，相关源码：</p>
+<h3 id="代码段5构造单个-signer">代码段5，构造单个 Signer:</h3>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39
+40
+41
+42
+43
+44
+45
+46
+47
+48
+49
+50
+51
+52
+53
+54
+55
+56
+57
+58
+59
+60
+61
+62
+63
+64
+65
+66
+67
+68
+69
+70
+71
+72
+73
+74
+75
+76
+77
+78
+79
+80
+81
+82
+83
+84
+85
+86
+87
+88
+89
+90
+91
+92
+93
+94
+95
+96
+97
+98
+99
+100
+101
+102
+103
+104
+105
+106
+107
+108
+109
+110
+111
+112
+113
+114
+115
+116
+117
+118
+119
+120
+121
+122
+123
+124
+125
+126
+127
+128
+129
+130
+131
+132
+133
+134
+135
+136
+137
+138
+139
+140
+141
+142
+143
+144
+145
+146
+147
+148
+149
+150
+151
+152
+153
+154
+155
+156
+157
+158
+159
+160
+161
+162
+163
+164
+165
+166
+167
+168
+169
+170
+171
+</pre></td><td class="rouge-code"><pre>    private static byte[] generateSignerBlock(
+            SignerConfig signerConfig,
+            Map&lt;Integer, byte[]&gt; contentDigests) throws InvalidKeyException, SignatureException {
+        // 入参的 signerConfig，即签名者配置，内部带有*证书序列*和*签名算法序列*
+        // 入参的 contentDigests 就是 map&lt; 摘要算法ID - 分块摘要序列的摘要 &gt;
+
+        if (signerConfig.certificates.isEmpty()) {
+            throw new SignatureException("No certificates configured for signer");
+        }
+
+        // 根据入参 signerConfig，获得 公钥
+        PublicKey publicKey = signerConfig.certificates.get(0).getPublicKey();
+        byte[] encodedPublicKey = encodePublicKey(publicKey);
+
+        // 新建 signedData 实例
+        V2SignatureSchemeBlock.SignedData signedData = new V2SignatureSchemeBlock.SignedData();
+
+        // 根据入参 signerConfig，获得 证书序列，并赋值给 signedData.certificates
+        try {
+            signedData.certificates = encodeCertificates(signerConfig.certificates);
+        } catch (CertificateEncodingException e) {
+            throw new SignatureException("Failed to encode certificates", e);
+        }
+
+        List&lt;Pair&lt;Integer, byte[]&gt;&gt; digests =
+                new ArrayList&lt;&gt;(signerConfig.signatureAlgorithms.size());
+
+        // 遍历入参 signerConfig 的算法序列：signatureAlgorithms
+        for (int signatureAlgorithm : signerConfig.signatureAlgorithms) {
+
+            // 取到 摘要算法ID
+            int contentDigestAlgorithm =
+                    getSignatureAlgorithmContentDigestAlgorithm(signatureAlgorithm);
+                    // 根据 签名算法的类型，返回 摘要算法，内有一个简单对应表
+
+            // 取到 apk的分块摘要序列的摘要
+            byte[] contentDigest = contentDigests.get(contentDigestAlgorithm);
+
+            if (contentDigest == null) {
+                throw new RuntimeException(
+                        getContentDigestAlgorithmJcaDigestAlgorithm(contentDigestAlgorithm)
+                                + " content digest for "
+                                + getSignatureAlgorithmJcaSignatureAlgorithm(signatureAlgorithm)
+                                + " not computed");
+            }
+
+            // 构造 "签名算法ID-摘要序列"，保存到变量 digests
+            digests.add(Pair.create(signatureAlgorithm, contentDigest));
+        }
+
+        signedData.digests = digests;// 多个"签名算法ID-摘要"对
+
+        V2SignatureSchemeBlock.Signer signer = new V2SignatureSchemeBlock.Signer();
+
+
+        // ====== 开始构造待签名数据：signer.signedData ======
+
+        // FORMAT:
+        // * length-prefixed sequence of length-prefixed digests:
+        //   * uint32: signature algorithm ID
+        //   * length-prefixed bytes: digest of contents
+        // * length-prefixed sequence of certificates:
+        //   * length-prefixed bytes: X.509 certificate (ASN.1 DER encoded).
+        // * length-prefixed sequence of length-prefixed additional attributes:
+        //   * uint32: ID
+        //   * (length - 4) bytes: value
+        signer.signedData = encodeAsSequenceOfLengthPrefixedElements(new byte[][] {
+                encodeAsSequenceOfLengthPrefixedPairsOfIntAndLengthPrefixedBytes(signedData.digests),//x-1
+                encodeAsSequenceOfLengthPrefixedElements(signedData.certificates),//x-2
+                new byte[0],//x-3
+        });
+
+        // x-1处，函数 encodeAsSequenceOfLengthPrefixedPairsOfIntAndLengthPrefixedBytes，
+        // 入参是 digests["签名算法ID-摘要"]
+        // 返回值是 digests["len-(签名算法ID-(len-摘要))"]
+
+        // x-2处，函数 encodeAsSequenceOfLengthPrefixedElements
+        // 入参是 certificates["certificate"],
+        // 返回值是 certificates["len-certificate"]
+
+        // x-3处，是附加数据，原生 V2 签名不带附加数据。
+
+        // 最终，signer.signedData 格式是：
+        // signedData
+        // {
+        //     len-digests["len-(签名算法ID-(len-摘要))"],
+        //     len-certificates["len-certificate"],
+        //     len-additional_attributes["len-(ID-(len-attribute))"],
+        // }
+
+        // ====== 完成构造待签名数据：signer.signedData ======
+
+        // ====== 开始构造签名值：signer.signatures ======
+        signer.publicKey = encodedPublicKey;
+        signer.signatures = new ArrayList&lt;&gt;();
+        for (int signatureAlgorithm : signerConfig.signatureAlgorithms) {
+            Pair&lt;String, ? extends AlgorithmParameterSpec&gt; signatureParams =
+                    getSignatureAlgorithmJcaSignatureAlgorithm(signatureAlgorithm);
+            String jcaSignatureAlgorithm = signatureParams.getFirst();
+            AlgorithmParameterSpec jcaSignatureAlgorithmParams = signatureParams.getSecond();
+            byte[] signatureBytes;
+            try {
+                Signature signature = Signature.getInstance(jcaSignatureAlgorithm);
+                signature.initSign(signerConfig.privateKey);// 使用私钥签名
+                if (jcaSignatureAlgorithmParams != null) {
+                    signature.setParameter(jcaSignatureAlgorithmParams);
+                }
+                signature.update(signer.signedData);// 对构造好的整个 signer.signedData ，使用上述引入的私钥，进行签名
+                signatureBytes = signature.sign();  // 签名后的数据
+            } catch (InvalidKeyException e) {
+                throw new InvalidKeyException("Failed sign using " + jcaSignatureAlgorithm, e);
+            } catch (NoSuchAlgorithmException | InvalidAlgorithmParameterException
+                    | SignatureException e) {
+                throw new SignatureException("Failed sign using " + jcaSignatureAlgorithm, e);
+            }
+
+            // 测试 *公钥* 能否解 *私钥签名后的数据*
+            try {
+                Signature signature = Signature.getInstance(jcaSignatureAlgorithm);
+                signature.initVerify(publicKey);
+                if (jcaSignatureAlgorithmParams != null) {
+                    signature.setParameter(jcaSignatureAlgorithmParams);
+                }
+                signature.update(signer.signedData);
+                if (!signature.verify(signatureBytes)) {
+                    throw new SignatureException("Signature did not verify");
+                }
+            } catch (InvalidKeyException e) {
+                throw new InvalidKeyException("Failed to verify generated " + jcaSignatureAlgorithm
+                        + " signature using public key from certificate", e);
+            } catch (NoSuchAlgorithmException | InvalidAlgorithmParameterException
+                    | SignatureException e) {
+                throw new SignatureException("Failed to verify generated " + jcaSignatureAlgorithm
+                        + " signature using public key from certificate", e);
+            }//end 测试*公钥*能否解*私钥签名后的数据*
+
+            // 到此，通过验验证，*公钥* 可以解 *私钥*
+            // 构造pair对，结构为"签名算法ID-签名后数据"
+            signer.signatures.add(Pair.create(signatureAlgorithm, signatureBytes));
+        }
+        // ====== 完成构造签名值：signer.signatures ======
+
+        // FORMAT:
+        // * length-prefixed signed data
+        // * length-prefixed sequence of length-prefixed signatures:
+        //   * uint32: signature algorithm ID
+        //   * length-prefixed bytes: signature of signed data
+        // * length-prefixed bytes: public key (X.509 SubjectPublicKeyInfo, ASN.1 DER encoded)
+        return encodeAsSequenceOfLengthPrefixedElements(
+                new byte[][] {
+                        signer.signedData,
+                        encodeAsSequenceOfLengthPrefixedPairsOfIntAndLengthPrefixedBytes(
+                                signer.signatures),//y-1
+                        signer.publicKey,
+                });
+        // y-1处，入参的是 signer.signatures["签名算法ID-签名值"]，
+        // 返回值是 signer.signatures["len-(签名算法ID-(len-signature))"]
+
+        // 最终，return 的值是：
+        // 		signer
+        //		{
+        //			len-signedData, //待签名数据
+        //			{
+        //				len-digests["len-(签名算法ID-(len-摘要))"],  
+        //				len-certificates["len-certificate"], 
+        //				len-additional_attributes["len-(ID-(len-attribute))"],  
+        //			}
+        //			len-signatures["len-(签名算法ID-(len-signature))"],// 签名值
+        //			len-publicKey // 公钥，第一个 certificate 内取到的 
+        //		} 
+    }
+</pre></td></tr></tbody></table></code></pre></div></div>
+
+<p>接着看代码段4的注释4-2，注释4-3处，</p>
+<h3 id="回顾代码段4">回顾代码段4：</h3>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+</pre></td><td class="rouge-code"><pre>    private static byte[] generateApkSignatureSchemeV2Block(
+            List&lt;SignerConfig&gt; signerConfigs,
+            Map&lt;Integer, byte[]&gt; contentDigests) throws InvalidKeyException, SignatureException {
+        // FORMAT:
+        // * length-prefixed sequence of length-prefixed signer blocks.
+        List&lt;byte[]&gt; signerBlocks = new ArrayList&lt;&gt;(signerConfigs.size());
+        int signerNumber = 0;
+        for (SignerConfig signerConfig : signerConfigs) {
+            signerNumber++;
+            byte[] signerBlock;
+            try {
+                signerBlock = generateSignerBlock(signerConfig, contentDigests); //4-1
+            } catch (InvalidKeyException e) {
+                throw new InvalidKeyException("Signer #" + signerNumber + " failed", e);
+            } catch (SignatureException e) {
+                throw new SignatureException("Signer #" + signerNumber + " failed", e);
+            }
+            signerBlocks.add(signerBlock);
+        }
+        return encodeAsSequenceOfLengthPrefixedElements( //4-2
+                new byte[][] {
+                        encodeAsSequenceOfLengthPrefixedElements(signerBlocks), //4-3
+                });
+    }
+</pre></td></tr></tbody></table></code></pre></div></div>
+
+<p>由上述源码可知，注释4-3处，函数 encodeAsSequenceOfLengthPrefixedElements 的入参 signerBlocks 的格式为：<br />
+<code class="highlighter-rouge">signers[signer]</code>，返回值为：<code class="highlighter-rouge">signers[len-signer]</code>；</p>
+
+<p>注释4-2处，函数 encodeAsSequenceOfLengthPrefixedElements 的入参为 <code class="highlighter-rouge">signers[len-signer]</code>，<br />
+返回值为：<code class="highlighter-rouge">len-signers[len-signer]</code>；</p>
+
+<p>所以，代码段4中的函数 generateApkSignatureSchemeV2Block 最终的返回值，同时也是代码段3中注释3-1处的变量 apkSignatureSchemeV2Block，
+其值的格式为：</p>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+</pre></td><td class="rouge-code"><pre>apkSignatureSchemeV2Block，// value 值，内含 “ID-值”对，V2 分块  
+{
+	len-signers[len-signer]
+	{
+		signer
+		{
+			len-signedData, //签名数据
+			{
+				len-digests["len-(签名算法ID-(len-摘要))"],  
+				len-certificates["len-certificate"], //从第一个 certificate 内的公钥，对应签名的私钥
+				len-additional_attributes["len-(ID-(len-attribute))"],  
+			}
+			len-signatures["len-(签名算法ID-(len-signature))"], //签名值 
+			len-publicKey // 公钥，第一个 certificate 内取到的 
+		}
+    }
+}
+</pre></td></tr></tbody></table></code></pre></div></div>
+
+<p>再看代码段3中的注释3-2，</p>
+<h3 id="回顾代码段3">回顾代码段3:</h3>
+
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+</pre></td><td class="rouge-code"><pre>    private static byte[] generateApkSigningBlock(
+            List&lt;SignerConfig&gt; signerConfigs,
+            Map&lt;Integer, byte[]&gt; contentDigests) throws InvalidKeyException, SignatureException {
+
+        // 3-1
+        // 此处入参的是 contentDigests，即 map&lt; 算法ID - 分块摘要序列的摘要 &gt;
+        byte[] apkSignatureSchemeV2Block =
+                generateApkSignatureSchemeV2Block(signerConfigs, contentDigests);
+                // 该函数 会产生 是原生V2签名分块value值
+
+        // 3-2
+        // 此处的入参的 apkSignatureSchemeV2Block 是原生V2签名分块value值
+        return generateApkSigningBlock(apkSignatureSchemeV2Block);
+        // 此处返回的已经是完整的 apk 签名分块
+        // 即加上前后size，prelen，ID，magic，
+    }
+</pre></td></tr></tbody></table></code></pre></div></div>
+<p>注释3-2处，调用函数 generateApkSigningBlock，看其源码：</p>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+</pre></td><td class="rouge-code"><pre>    private static byte[] generateApkSigningBlock(byte[] apkSignatureSchemeV2Block) {
+        // FORMAT:
+        // uint64:  size (excluding this field)
+        // repeated ID-value pairs:
+        //     uint64:           size (excluding this field)
+        //     uint32:           ID
+        //     (size - 4) bytes: value
+        // uint64:  size (same as the one above)
+        // uint128: magic
+        int resultSize =
+                8 // size
+                        + 8 + 4 + apkSignatureSchemeV2Block.length // v2Block as ID-value pair
+                        + 8 // size
+                        + 16 // magic
+                ;
+        ByteBuffer result = ByteBuffer.allocate(resultSize);
+        result.order(ByteOrder.LITTLE_ENDIAN);
+        long blockSizeFieldValue = resultSize - 8;
+        result.putLong(blockSizeFieldValue);
+        long pairSizeFieldValue = 4 + apkSignatureSchemeV2Block.length;
+        result.putLong(pairSizeFieldValue);
+        result.putInt(APK_SIGNATURE_SCHEME_V2_BLOCK_ID);
+        result.put(apkSignatureSchemeV2Block);
+        result.putLong(blockSizeFieldValue);
+        result.put(APK_SIGNING_BLOCK_MAGIC);
+        return result.array();
+    }
+</pre></td></tr></tbody></table></code></pre></div></div>
+<p>该函数逻辑比较简单，其返回值的格式为：</p>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+</pre></td><td class="rouge-code"><pre>    apkSigningBlock,// apk 签名分块
+	{
+		blockSizeFieldValue,
+		pairSizeFieldValue,
+		APK_SIGNATURE_SCHEME_V2_BLOCK_ID,
+		apkSignatureSchemeV2Block，// value 值，内含 “ID-值”对，V2 分块
+		{
+			len-signers[len-signer]
+			{
+				signer
+				{
+					len-signedData,
+					{
+						len-digests["len-(签名算法ID-(len-摘要))"],
+						len-certificates["len-certificate"],
+						len-new byte[0],
+					}
+					len-signatures["len-(签名算法ID-(len-signature))"],
+					len-publicKey
+				}
+			}
+		}
+		blockSizeFieldValue,
+		APK_SIGNING_BLOCK_MAGIC,
+	}
+</pre></td></tr></tbody></table></code></pre></div></div>
+<p>接着再回顾代码段1的注释1-4处，其变量 apkSigningBlock 就是 代码段3的3-2注释的 generateApkSigningBlock 返回的 ，</p>
+<h3 id="回顾代码段1">回顾代码段1：</h3>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+</pre></td><td class="rouge-code"><pre>    public static ByteBuffer[] sign(
+            ByteBuffer inputApk,
+            List&lt;SignerConfig&gt; signerConfigs)
+            throws ApkParseException, InvalidKeyException, SignatureException {
+
+        ......
+
+
+        // 1-4
+        // Sign the digests and wrap the signatures and signer info into an APK Signing Block.
+        ByteBuffer apkSigningBlock =
+                ByteBuffer.wrap(generateApkSigningBlock(signerConfigs, contentDigests));
+
+		......
+
+		// 1-5
+        // Insert APK Signing Block immediately before the ZIP Central Directory.
+        return new ByteBuffer[] {
+                beforeCentralDir,
+                apkSigningBlock,
+                centralDir,
+                eocd,
+        };
+    }
+</pre></td></tr></tbody></table></code></pre></div></div>
+<p>最终，注释1-5处的 sign 函数 return 的值的格式就是一个带有 V2 签名的 APK 的字节数组，其格式如下：</p>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+</pre></td><td class="rouge-code"><pre>apk
+{
+    beforeCentralDir,
+    apkSigningBlock,// apk 签名分块
+	{
+		blockSizeFieldValue,
+		pairSizeFieldValue,
+		APK_SIGNATURE_SCHEME_V2_BLOCK_ID,
+		apkSignatureSchemeV2Block，// value 值，内含 “ID-值”对，V2 分块
+		{
+			len-signers[len-signer]
+			{
+				signer
+				{
+					len-signedData,
+					{
+						len-digests["len-(签名算法ID-(len-摘要))"],
+						len-certificates["len-certificate"],
+						len-new byte[0],
+					}
+					len-signatures["len-(签名算法ID-(len-signature))"],
+					len-publicKey
+				}
+			}
+		}
+		blockSizeFieldValue,
+		APK_SIGNING_BLOCK_MAGIC,
+	}
+    centralDir,
+    eocd,
+}
+</pre></td></tr></tbody></table></code></pre></div></div>
+
+:ET

@@ -1,0 +1,4 @@
+I"�<h1 id="handler-的构造函数">Handler 的构造函数</h1>
+<p>Handler 在被实例化时，其构造函数，会绑定当前线程的 Looper 实例。<br />
+其源码如下：</p>
+:ET

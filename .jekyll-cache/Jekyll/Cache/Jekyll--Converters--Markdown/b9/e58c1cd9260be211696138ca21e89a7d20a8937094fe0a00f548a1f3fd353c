@@ -1,0 +1,1083 @@
+I"5t<h1 id="前言">前言</h1>
+<p>参考文章：
+[凶残的程序员-View 的工作流程] ( https://blog.csdn.net/qian520ao/article/details/78657084 )
+[Android 源码分析 - View的measure、layout、draw三大流程] ( https://www.jianshu.com/p/aa3b1f9717b7 )
+[深入理解MeasureSpec] ( https://www.jianshu.com/p/a790982fd20e )
+本文章的源码，可以去该链接 <a href="https://www.androidos.net.cn/android/9.0.0_r8/xref"> Android9.0 - API28 </a>  直接搜索，浏览。
+或者 AndroidStudio 查看 sdk 中 /sdk/sources/android-28/android 路径下的源码也是一样的。</p>
+
+<h1 id="view的三大工作流程">View的三大工作流程</h1>
+<p>由文章  [[View的工作流程的源头]]  可知，</p>
+
+<hr />
+<p>ActivityThread#handleResumeActivity 函数<br />
+创建 ViewRootImpl 实例，DecorView 实例的引用传递给其内部的 mView 变量，然后执行 ViewRootImpl#requestLayout 函数，开始 View 的工作流程。<br />
+requestLayout 函数，会触发 View 工作的三大流程：measure，layout，draw。<br />
+调用链：<br />
+–&gt; ActivityThread#handleResumeActivity …… <br />
+–&gt; ViewRootImpl#setView<br />
+–&gt; ViewRootImpl#requestLayout<br />
+–&gt; ViewRootImpl#scheduleTraversals<br />
+–&gt; mChoreographer.postCallback( … , mTraversalRunnable , …)<br />
+–&gt; ViewRootImpl#TraversalRunnable.run<br />
+–&gt; ViewRootImpl#doTraversal<br />
+–&gt; ViewRootImpl#performTraversals<br />
+–&gt; ViewRootImpl#performMeasure -&gt; DecorView#measure<br />
+–&gt; ViewRootImpl#performLayout -&gt; DecorView#layout<br />
+–&gt; ViewRootImpl#performDraw -&gt; draw -&gt; drawSoftware -&gt; DecorView#draw<br /></p>
+
+<hr />
+
+<h1 id="第三大流程绘制">第三大流程：绘制</h1>
+<p>由 [[View的工作流程的源头]] 可知，一个 Activity 创建之后，通过该调用链：</p>
+<ul>
+  <li>ActivityThread#handleResumeActivity</li>
+  <li>ViewRootImpl#requestLayout</li>
+  <li>ViewRootImpl#performTraversals</li>
+  <li>ViewRootImpl#performMeasure -&gt; DecorView#measure</li>
+  <li>ViewRootImpl#performLayout -&gt; DecorView#layout</li>
+  <li>ViewRootImpl#performDraw -&gt; draw -&gt; drawSoftware -&gt; DecorView#draw
+先执行了测量流程，等测量流程执行完之后，每个 View 都完成了对自己的测量，测量结果保存在 mMeasuredWidth，mMeasuredHeight  变量。<br />
+等测量流程执行完之后，每个 View 的大小确定了，接着就是执行布局流程，确定每个 View 的位置。<br />
+等布局流程执行完之后，每个 View 的大小和位置都确定了，就等待绘制了。</li>
+</ul>
+
+<h1 id="步骤概览">步骤概览：</h1>
+<ul>
+  <li>第零步，ViewRootImpl#performTraversals
+    <ul>
+      <li>若没有取消绘制，且不是 newSurface，就调用 performDraw</li>
+    </ul>
+  </li>
+  <li>第一步，ViewRootImpl#performDraw
+    <ul>
+      <li>draw -&gt; drawSoftware -&gt; DecorView#draw</li>
+    </ul>
+  </li>
+  <li>第二步，DecorView-View#draw(Canvas canvas)
+    <ul>
+      <li>onDraw – 绘制自身内容</li>
+      <li>dispatchDraw – 绘制子 View 的内容
+        <ul>
+          <li>ViewGroup#drawChild：child.draw(canvas, this, drawingTime)</li>
+        </ul>
+      </li>
+    </ul>
+  </li>
+  <li>第三步，DecorView#onDraw
+    <ul>
+      <li>super.onDraw(c); - FrameLayout#onDraw（未实现）</li>
+      <li>拓展功能：mBackgroundFallback.draw</li>
+    </ul>
+  </li>
+  <li>第四步，普通ViewGroup的子类-View#draw(三个参数)
+    <ul>
+      <li>View#draw(canvas, this, drawingTime)
+        <ul>
+          <li>有缓存，直接画：canvas.drawBitmap(cache, … )</li>
+          <li>没缓存，draw(canvas)</li>
+        </ul>
+      </li>
+    </ul>
+  </li>
+  <li>第五步，普通ViewGroup的子类#onDraw
+    <ul>
+      <li>操作 canvas 对象，画出自身</li>
+      <li>以 LinearLayout 为例
+        <ul>
+          <li>画出 children 之间的分割线</li>
+        </ul>
+      </li>
+    </ul>
+  </li>
+  <li>第六步，普通View的子类-View#draw(三个参数)
+    <ul>
+      <li>View#draw(canvas, this, drawingTime)
+        <ul>
+          <li>有缓存，直接画：canvas.drawBitmap(cache, … )</li>
+          <li>没缓存，draw(canvas)</li>
+        </ul>
+      </li>
+    </ul>
+  </li>
+  <li>第七步，普通View的子类#onDraw
+    <ul>
+      <li>操作 canvas 对象，画出自身</li>
+      <li>以 TextView 为例</li>
+    </ul>
+  </li>
+</ul>
+
+<h1 id="绘制流程源码解析">绘制流程源码解析：</h1>
+<h2 id="第零步viewrootimplperformtraversals">第零步，ViewRootImpl#performTraversals</h2>
+
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+</pre></td><td class="rouge-code"><pre>// ViewRootImpl 类
+
+  boolean newSurface = false;
+  
+  // 。。。
+
+    private void performTraversals() {
+
+	// 。。。
+
+        boolean cancelDraw = mAttachInfo.mTreeObserver.dispatchOnPreDraw() || !isViewVisible;
+
+        if (!cancelDraw &amp;&amp; !newSurface) {
+	    // 。。。
+
+            performDraw();
+        } 
+</pre></td></tr></tbody></table></code></pre></div></div>
+<p>第零步小结，若没有取消绘制，且不是 newSurface，就调用 performDraw</p>
+
+<h2 id="第一步viewrootimplperformdraw">第一步，ViewRootImpl#performDraw</h2>
+
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+</pre></td><td class="rouge-code"><pre>// ViewRootImpl 类
+
+    private void performDraw() {
+        if (mAttachInfo.mDisplayState == Display.STATE_OFF &amp;&amp; !mReportNextDraw) {
+            return;
+        } else if (mView == null) {
+            return;
+        }
+	// 。。。
+
+        try {
+	     // 接着下一步
+            boolean canUseAsync = draw(fullRedrawNeeded);
+            // 。。。
+        } 
+	// 。。。
+    }
+</pre></td></tr></tbody></table></code></pre></div></div>
+
+<h4 id="viewrootimpldraw">ViewRootImpl#draw</h4>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+</pre></td><td class="rouge-code"><pre>    private boolean draw(boolean fullRedrawNeeded) {
+        Surface surface = mSurface;
+        if (!surface.isValid()) {
+            return false;
+        }
+	// 。。。
+        if (!dirty.isEmpty() || mIsAnimating || accessibilityFocusDirty) {
+            if (mAttachInfo.mThreadedRenderer != null &amp;&amp; mAttachInfo.mThreadedRenderer.isEnabled()) {
+		  // 。。。
+	     }else{
+		 // 。。。
+                if (!drawSoftware(surface, mAttachInfo, xOffset, yOffset,
+                        scalingRequired, dirty, surfaceInsets)) {
+                    return false;
+                }
+		 // 。。。
+	    }
+</pre></td></tr></tbody></table></code></pre></div></div>
+
+<h4 id="viewrootimpldrawsoftware">ViewRootImpl#drawSoftware</h4>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+</pre></td><td class="rouge-code"><pre>// ViewRootImpl 类
+
+    private boolean drawSoftware(Surface surface, AttachInfo attachInfo, int xoff, int yoff,
+            boolean scalingRequired, Rect dirty, Rect surfaceInsets) {
+	 // 。。。
+        try {
+   	     // 。。。
+            try {
+   	     	  // 。。。
+		  // 接着下一步
+                mView.draw(canvas);
+
+            } 
+	    // 。。。
+        } 
+
+        return true;
+    }
+</pre></td></tr></tbody></table></code></pre></div></div>
+
+<h2 id="第二步decorview-viewdrawcanvas-canvas">第二步，DecorView-View#draw(Canvas canvas)</h2>
+<p>DecorView 没有 draw 函数 ，直接使用 View 的 draw 函数。</p>
+
+<p>代码段2：</p>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39
+40
+41
+42
+43
+44
+45
+46
+47
+48
+49
+50
+51
+52
+53
+54
+55
+56
+57
+58
+59
+60
+61
+62
+63
+64
+65
+66
+67
+68
+69
+70
+71
+</pre></td><td class="rouge-code"><pre>// View 类
+
+    /**
+     * Manually render this view (and all of its children) to the given Canvas.
+     * The view must have already done a full layout before this function is
+     * called.  When implementing a view, implement
+     * {@link #onDraw(android.graphics.Canvas)} instead of overriding this method.
+     * If you do need to override this method, call the superclass version.
+     *
+     * @param canvas The Canvas to which the View is rendered.
+     */
+    @CallSuper
+    public void draw(Canvas canvas) {
+        final int privateFlags = mPrivateFlags;
+        final boolean dirtyOpaque = (privateFlags &amp; PFLAG_DIRTY_MASK) == PFLAG_DIRTY_OPAQUE &amp;&amp;
+                (mAttachInfo == null || !mAttachInfo.mIgnoreDirtyState);
+        mPrivateFlags = (privateFlags &amp; ~PFLAG_DIRTY_MASK) | PFLAG_DRAWN;
+
+        /*
+         * Draw traversal performs several drawing steps which must be executed
+         * in the appropriate order:
+         *
+         *      1. Draw the background
+         *      2. If necessary, save the canvas' layers to prepare for fading
+         *      3. Draw view's content
+         *      4. Draw children
+         *      5. If necessary, draw the fading edges and restore layers
+         *      6. Draw decorations (scrollbars for instance)
+         */
+
+        // Step 1, draw the background, if needed
+        int saveCount;
+
+        if (!dirtyOpaque) {
+            drawBackground(canvas);
+        }
+
+        // skip step 2 &amp; 5 if possible (common case)
+        final int viewFlags = mViewFlags;
+        boolean horizontalEdges = (viewFlags &amp; FADING_EDGE_HORIZONTAL) != 0;
+        boolean verticalEdges = (viewFlags &amp; FADING_EDGE_VERTICAL) != 0;
+        if (!verticalEdges &amp;&amp; !horizontalEdges) {
+            // Step 3, draw the content
+            if (!dirtyOpaque) onDraw(canvas);
+
+            // Step 4, draw the children
+            dispatchDraw(canvas);
+
+            drawAutofilledHighlight(canvas);
+
+            // Overlay is part of the content and draws beneath Foreground
+            if (mOverlay != null &amp;&amp; !mOverlay.isEmpty()) {
+                mOverlay.getOverlayView().dispatchDraw(canvas);
+            }
+
+            // Step 6, draw decorations (foreground, scrollbars)
+            onDrawForeground(canvas);
+
+            // Step 7, draw the default focus highlight
+            drawDefaultFocusHighlight(canvas);
+
+            if (debugDraw()) {
+                debugDrawFocus(canvas);
+            }
+
+            // we're done...
+            return;
+        }
+
+	// 。。。
+    }
+</pre></td></tr></tbody></table></code></pre></div></div>
+<p>只关注 Step 3 和 Step 4。后面的第三步再分析。
+这里先看 Step 4 的 dispatchDraw 函数，在 View 是空函数，
+仅在 ViewGroup 类有具体实现，源码：</p>
+
+<h4 id="viewgroupdispatchdraw-函数源码">ViewGroup#dispatchDraw 函数源码</h4>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+</pre></td><td class="rouge-code"><pre>// ViewGroup 类
+
+    @Override
+    protected void dispatchDraw(Canvas canvas) {
+        boolean usingRenderNodeProperties = canvas.isRecordingFor(mRenderNode);
+        final int childrenCount = mChildrenCount;
+        final View[] children = mChildren;
+        int flags = mGroupFlags;
+
+	// 。。。
+
+        for (int i = 0; i &lt; childrenCount; i++) {
+            while (transientIndex &gt;= 0 &amp;&amp; mTransientIndices.get(transientIndex) == i) {
+                final View transientChild = mTransientViews.get(transientIndex);
+                if ((transientChild.mViewFlags &amp; VISIBILITY_MASK) == VISIBLE ||
+                        transientChild.getAnimation() != null) {
+                    more |= drawChild(canvas, transientChild, drawingTime);
+                }
+                transientIndex++;
+                if (transientIndex &gt;= transientCount) {
+                    transientIndex = -1;
+                }
+            }
+
+            final int childIndex = getAndVerifyPreorderedIndex(childrenCount, i, customOrder);
+            final View child = getAndVerifyPreorderedView(preorderedList, children, childIndex);
+            if ((child.mViewFlags &amp; VISIBILITY_MASK) == VISIBLE || child.getAnimation() != null) {
+                more |= drawChild(canvas, child, drawingTime);
+            }
+        }
+
+	// 。。。
+    }
+</pre></td></tr></tbody></table></code></pre></div></div>
+
+<h4 id="viewgroupdrawchild-函数源码">ViewGroup#drawChild 函数源码</h4>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+</pre></td><td class="rouge-code"><pre>// ViewGroup 类
+
+    /**
+     * Draw one child of this View Group. This method is responsible for getting
+     * the canvas in the right state. This includes clipping, translating so
+     * that the child's scrolled origin is at 0, 0, and applying any animation
+     * transformations.
+     *
+     * @param canvas The canvas on which to draw the child
+     * @param child Who to draw
+     * @param drawingTime The time at which draw is occurring
+     * @return True if an invalidate() was issued
+     */
+    protected boolean drawChild(Canvas canvas, View child, long drawingTime) {
+        return child.draw(canvas, this, drawingTime);
+    }
+</pre></td></tr></tbody></table></code></pre></div></div>
+<p>注意，此处调用的 child 的 draw 函数是有三个参数的 (canvas, this, drawingTime)，这意味着只有 DecorView 是被调用 draw( 一个参数) 来触发绘制流程，普通ViewGroup的子类 和 普通View的子类，都是被调用 draw( 三个参数) 来触发绘制流程的。</p>
+
+<p><strong>第二步小结，View#draw 的工作内容</strong>
+DecorView 没有 draw 函数，直接用 View#draw。
+在 View#draw 函数内，有六个步骤，我们只关注 step3 和 step4。
+step3，调用 onDraw 去绘制自己，onDraw 函数由 View 或 ViewGroup 子类去实现；
+step4，调用 dispatchDraw 去分发事件给子 View，该函数只有 ViewGroup 类有具体实现，其调用链为：
+ViewGroup#dispatchDraw –&gt; ViewGroup#drawChild  –&gt; child.draw(canvas, this, drawingTime)。
+特别注意，调用 draw( 三个参数) 来触发绘制流程的，也就是说，除了 DecorView 之外的 View，都是被调用 draw( 三个参数) 来触发绘制流程的。</p>
+
+<h2 id="第三步decorviewondraw">第三步，DecorView#onDraw</h2>
+
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+</pre></td><td class="rouge-code"><pre>// DecorView 类
+
+    @Override
+    public void onDraw(Canvas c) {
+        super.onDraw(c); // FrameLayout 类中没有 onDraw 函数
+
+	// 绘制背景？
+        mBackgroundFallback.draw(this, mContentRoot, c, mWindow.mContentParent,
+                mStatusColorViewState.view, mNavigationColorViewState.view);
+    }
+</pre></td></tr></tbody></table></code></pre></div></div>
+
+<h2 id="第四步普通viewgroup的子类-viewdraw三个参数">第四步，普通ViewGroup的子类-View#draw(三个参数)</h2>
+<p>被调用的是三参数的 draw 函数，且只在 View 类中实现了 draw 函数。</p>
+
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+</pre></td><td class="rouge-code"><pre>// View 类
+
+    /**
+     * This method is called by ViewGroup.drawChild() to have each child view draw itself.
+     *
+     * This is where the View specializes rendering behavior based on layer type,
+     * and hardware acceleration.
+     */
+    boolean draw(Canvas canvas, ViewGroup parent, long drawingTime) {
+
+        if (!drawingWithDrawingCache) {
+            if (drawingWithRenderNode) {
+                mPrivateFlags &amp;= ~PFLAG_DIRTY_MASK;
+                ((DisplayListCanvas) canvas).drawRenderNode(renderNode);
+            } else {
+                // Fast path for layouts with no backgrounds
+                if ((mPrivateFlags &amp; PFLAG_SKIP_DRAW) == PFLAG_SKIP_DRAW) {
+                    mPrivateFlags &amp;= ~PFLAG_DIRTY_MASK;
+                    dispatchDraw(canvas);
+                } else {
+                    draw(canvas); // 没有缓存，就调用一个参数的同名函数，同第二步的代码段2
+                }
+            }
+        } else if (cache != null) { // 有缓存就直接画出来
+		// 。。。
+
+                canvas.drawBitmap(cache, 0.0f, 0.0f, cachePaint);
+            }
+        }
+</pre></td></tr></tbody></table></code></pre></div></div>
+
+<h2 id="第五步普通viewgroup的子类ondraw">第五步，普通ViewGroup的子类#onDraw</h2>
+<p>不同的 ViewGroup 的子类，会有不同的实现，大半可能是画子 View 之间的分割线，此处代码仅参考，不分析。
+以 LinearLayout 为例子。</p>
+
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+</pre></td><td class="rouge-code"><pre>// LinearLayout 类
+
+    @Override
+    protected void onDraw(Canvas canvas) {
+        if (mDivider == null) {
+            return;
+        }
+
+        if (mOrientation == VERTICAL) {
+            drawDividersVertical(canvas);
+        } else {
+            drawDividersHorizontal(canvas);
+        }
+    }
+</pre></td></tr></tbody></table></code></pre></div></div>
+
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+</pre></td><td class="rouge-code"><pre>// LinearLayout 类
+
+    void drawDividersVertical(Canvas canvas) {
+        final int count = getVirtualChildCount();
+        for (int i = 0; i &lt; count; i++) {
+            final View child = getVirtualChildAt(i);
+            if (child != null &amp;&amp; child.getVisibility() != GONE) {
+                if (hasDividerBeforeChildAt(i)) {
+                    final LayoutParams lp = (LayoutParams) child.getLayoutParams();
+                    final int top = child.getTop() - lp.topMargin - mDividerHeight;
+                    drawHorizontalDivider(canvas, top);
+                }
+            }
+        }
+
+        if (hasDividerBeforeChildAt(count)) {
+            final View child = getLastNonGoneChild();
+            int bottom = 0;
+            if (child == null) {
+                bottom = getHeight() - getPaddingBottom() - mDividerHeight;
+            } else {
+                final LayoutParams lp = (LayoutParams) child.getLayoutParams();
+                bottom = child.getBottom() + lp.bottomMargin;
+            }
+            drawHorizontalDivider(canvas, bottom);
+        }
+    }
+</pre></td></tr></tbody></table></code></pre></div></div>
+
+<h2 id="第六步普通view的子类-viewdraw三个参数">第六步，普通View的子类-View#draw(三个参数)</h2>
+<p>同第四步，先被调用的是三参数的 draw 函数，在 View 实现了 draw 函数。
+有缓存就直接画，无缓存就调用 一参数的 draw 函数，逻辑跟第二步相同。</p>
+
+<h2 id="第七步普通view的子类ondraw">第七步，普通View的子类#onDraw</h2>
+
+<p>不同的 View 的子类会有不同的实现。
+如果想自定义 View，那么可以仔细研究一下各个控件的 onDraw 函数。
+绘制的本质，就是通过 canvas ，并根据前面测量出的大小和布局位置，来画出各种内容。
+以 TextView 为例子，此处代码仅参考，不分析。</p>
+
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39
+40
+41
+42
+43
+44
+45
+46
+47
+48
+49
+50
+51
+52
+53
+54
+55
+56
+57
+58
+59
+60
+61
+62
+63
+64
+65
+66
+67
+68
+69
+70
+71
+72
+73
+74
+75
+76
+77
+78
+79
+80
+81
+82
+83
+84
+85
+86
+87
+88
+89
+90
+91
+92
+93
+94
+95
+96
+97
+98
+99
+100
+101
+102
+103
+104
+105
+106
+107
+108
+109
+110
+111
+112
+113
+114
+115
+116
+117
+118
+119
+120
+121
+122
+123
+124
+125
+126
+127
+128
+129
+130
+131
+132
+133
+134
+135
+136
+137
+138
+139
+140
+141
+142
+143
+144
+145
+146
+147
+148
+149
+150
+151
+152
+153
+154
+155
+156
+157
+158
+159
+160
+161
+162
+163
+164
+165
+166
+</pre></td><td class="rouge-code"><pre>    @Override
+    protected void onDraw(Canvas canvas) {
+        restartMarqueeIfNeeded();
+
+        // Draw the background for this view
+        super.onDraw(canvas);
+
+        final int compoundPaddingLeft = getCompoundPaddingLeft();
+        final int compoundPaddingTop = getCompoundPaddingTop();
+        final int compoundPaddingRight = getCompoundPaddingRight();
+        final int compoundPaddingBottom = getCompoundPaddingBottom();
+        final int scrollX = mScrollX;
+        final int scrollY = mScrollY;
+        final int right = mRight;
+        final int left = mLeft;
+        final int bottom = mBottom;
+        final int top = mTop;
+        final boolean isLayoutRtl = isLayoutRtl();
+        final int offset = getHorizontalOffsetForDrawables();
+        final int leftOffset = isLayoutRtl ? 0 : offset;
+        final int rightOffset = isLayoutRtl ? offset : 0;
+
+        final Drawables dr = mDrawables;
+        if (dr != null) {
+            /*
+             * Compound, not extended, because the icon is not clipped
+             * if the text height is smaller.
+             */
+
+            int vspace = bottom - top - compoundPaddingBottom - compoundPaddingTop;
+            int hspace = right - left - compoundPaddingRight - compoundPaddingLeft;
+
+            // IMPORTANT: The coordinates computed are also used in invalidateDrawable()
+            // Make sure to update invalidateDrawable() when changing this code.
+            if (dr.mShowing[Drawables.LEFT] != null) {
+                canvas.save();
+                canvas.translate(scrollX + mPaddingLeft + leftOffset,
+                        scrollY + compoundPaddingTop + (vspace - dr.mDrawableHeightLeft) / 2);
+                dr.mShowing[Drawables.LEFT].draw(canvas);
+                canvas.restore();
+            }
+
+            // IMPORTANT: The coordinates computed are also used in invalidateDrawable()
+            // Make sure to update invalidateDrawable() when changing this code.
+            if (dr.mShowing[Drawables.RIGHT] != null) {
+                canvas.save();
+                canvas.translate(scrollX + right - left - mPaddingRight
+                        - dr.mDrawableSizeRight - rightOffset,
+                         scrollY + compoundPaddingTop + (vspace - dr.mDrawableHeightRight) / 2);
+                dr.mShowing[Drawables.RIGHT].draw(canvas);
+                canvas.restore();
+            }
+
+            // IMPORTANT: The coordinates computed are also used in invalidateDrawable()
+            // Make sure to update invalidateDrawable() when changing this code.
+            if (dr.mShowing[Drawables.TOP] != null) {
+                canvas.save();
+                canvas.translate(scrollX + compoundPaddingLeft
+                        + (hspace - dr.mDrawableWidthTop) / 2, scrollY + mPaddingTop);
+                dr.mShowing[Drawables.TOP].draw(canvas);
+                canvas.restore();
+            }
+
+            // IMPORTANT: The coordinates computed are also used in invalidateDrawable()
+            // Make sure to update invalidateDrawable() when changing this code.
+            if (dr.mShowing[Drawables.BOTTOM] != null) {
+                canvas.save();
+                canvas.translate(scrollX + compoundPaddingLeft
+                        + (hspace - dr.mDrawableWidthBottom) / 2,
+                         scrollY + bottom - top - mPaddingBottom - dr.mDrawableSizeBottom);
+                dr.mShowing[Drawables.BOTTOM].draw(canvas);
+                canvas.restore();
+            }
+        }
+
+        int color = mCurTextColor;
+
+        if (mLayout == null) {
+            assumeLayout();
+        }
+
+        Layout layout = mLayout;
+
+        if (mHint != null &amp;&amp; mText.length() == 0) {
+            if (mHintTextColor != null) {
+                color = mCurHintTextColor;
+            }
+
+            layout = mHintLayout;
+        }
+
+        mTextPaint.setColor(color);
+        mTextPaint.drawableState = getDrawableState();
+
+        canvas.save();
+        /*  Would be faster if we didn't have to do this. Can we chop the
+            (displayable) text so that we don't need to do this ever?
+        */
+
+        int extendedPaddingTop = getExtendedPaddingTop();
+        int extendedPaddingBottom = getExtendedPaddingBottom();
+
+        final int vspace = mBottom - mTop - compoundPaddingBottom - compoundPaddingTop;
+        final int maxScrollY = mLayout.getHeight() - vspace;
+
+        float clipLeft = compoundPaddingLeft + scrollX;
+        float clipTop = (scrollY == 0) ? 0 : extendedPaddingTop + scrollY;
+        float clipRight = right - left - getCompoundPaddingRight() + scrollX;
+        float clipBottom = bottom - top + scrollY
+                - ((scrollY == maxScrollY) ? 0 : extendedPaddingBottom);
+
+        if (mShadowRadius != 0) {
+            clipLeft += Math.min(0, mShadowDx - mShadowRadius);
+            clipRight += Math.max(0, mShadowDx + mShadowRadius);
+
+            clipTop += Math.min(0, mShadowDy - mShadowRadius);
+            clipBottom += Math.max(0, mShadowDy + mShadowRadius);
+        }
+
+        canvas.clipRect(clipLeft, clipTop, clipRight, clipBottom);
+
+        int voffsetText = 0;
+        int voffsetCursor = 0;
+
+        // translate in by our padding
+        /* shortcircuit calling getVerticaOffset() */
+        if ((mGravity &amp; Gravity.VERTICAL_GRAVITY_MASK) != Gravity.TOP) {
+            voffsetText = getVerticalOffset(false);
+            voffsetCursor = getVerticalOffset(true);
+        }
+        canvas.translate(compoundPaddingLeft, extendedPaddingTop + voffsetText);
+
+        final int layoutDirection = getLayoutDirection();
+        final int absoluteGravity = Gravity.getAbsoluteGravity(mGravity, layoutDirection);
+        if (isMarqueeFadeEnabled()) {
+            if (!mSingleLine &amp;&amp; getLineCount() == 1 &amp;&amp; canMarquee()
+                    &amp;&amp; (absoluteGravity &amp; Gravity.HORIZONTAL_GRAVITY_MASK) != Gravity.LEFT) {
+                final int width = mRight - mLeft;
+                final int padding = getCompoundPaddingLeft() + getCompoundPaddingRight();
+                final float dx = mLayout.getLineRight(0) - (width - padding);
+                canvas.translate(layout.getParagraphDirection(0) * dx, 0.0f);
+            }
+
+            if (mMarquee != null &amp;&amp; mMarquee.isRunning()) {
+                final float dx = -mMarquee.getScroll();
+                canvas.translate(layout.getParagraphDirection(0) * dx, 0.0f);
+            }
+        }
+
+        final int cursorOffsetVertical = voffsetCursor - voffsetText;
+
+        Path highlight = getUpdatedHighlightPath();
+        if (mEditor != null) {
+            mEditor.onDraw(canvas, layout, highlight, mHighlightPaint, cursorOffsetVertical);
+        } else {
+            layout.draw(canvas, highlight, mHighlightPaint, cursorOffsetVertical);
+        }
+
+        if (mMarquee != null &amp;&amp; mMarquee.shouldDrawGhost()) {
+            final float dx = mMarquee.getGhostOffset();
+            canvas.translate(layout.getParagraphDirection(0) * dx, 0.0f);
+            layout.draw(canvas, highlight, mHighlightPaint, cursorOffsetVertical);
+        }
+
+        canvas.restore();
+    }
+</pre></td></tr></tbody></table></code></pre></div></div>
+
+<h5 id="最后附表格一张">最后附表格一张</h5>
+
+<table>
+  <thead>
+    <tr>
+      <th style="text-align: left"> </th>
+      <th style="text-align: left">draw</th>
+      <th style="text-align: left">onDraw</th>
+      <th style="text-align: left"> </th>
+      <th style="text-align: left">draw</th>
+      <th style="text-align: left">onDraw</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td style="text-align: left">ViewGroup</td>
+      <td style="text-align: left">null，调用View#draw</td>
+      <td style="text-align: left">null</td>
+      <td style="text-align: left">View</td>
+      <td style="text-align: left">draw( 三参数 ) 先被父容器调用，若没有缓存，再调用draw( 一参数 )：onDraw 绘制自己，dispatchDraw( ViewGroup实现 )绘制子 View。</td>
+      <td style="text-align: left">null</td>
+    </tr>
+    <tr>
+      <td style="text-align: left">ViewGroup子类</td>
+      <td style="text-align: left">null</td>
+      <td style="text-align: left">绘制子 View 之间的分割线</td>
+      <td style="text-align: left">View子类</td>
+      <td style="text-align: left">null</td>
+      <td style="text-align: left">操作 canvas 绘制自己</td>
+    </tr>
+  </tbody>
+</table>
+:ET

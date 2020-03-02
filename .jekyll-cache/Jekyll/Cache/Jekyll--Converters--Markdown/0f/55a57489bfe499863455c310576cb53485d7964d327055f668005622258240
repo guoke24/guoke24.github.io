@@ -1,0 +1,117 @@
+I"�<p>执行该命令安装：</p>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+</pre></td><td class="rouge-code"><pre>gem install jekyll
+</pre></td></tr></tbody></table></code></pre></div></div>
+<p><br /></p>
+<h3 id="遇到报错一">遇到报错一：</h3>
+<p>Ruby version &gt;= 2.4.0
+<br />
+接着就去尝试升级 Ruby</p>
+
+<p>参考：<a href="https://www.jianshu.com/p/c073e6fc01f5">MAC_Ruby 安装</a><br />
+此外，还参考了该文章：
+<a href="https://www.jianshu.com/p/48ad6365f3eb">Mac安装遇见Ruby version &gt;= 2.2.2. 的问题</a></p>
+
+<p>先执行该命令安装 RVM Ruby 版本管理器：</p>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+</pre></td><td class="rouge-code"><pre>$ curl -L get.rvm.io | bash -s stable
+</pre></td></tr></tbody></table></code></pre></div></div>
+
+<h3 id="遇到报错二">遇到报错二：</h3>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+</pre></td><td class="rouge-code"><pre>gpg: 无法检查签名：No public key
+GPG signature verification failed for '/Users/guohao/.rvm/archives/rvm-1.29.9.tgz' - 'https://github.com/rvm/rvm/releases/download/1.29.9/1.29.9.tar.gz.asc'! Try to install GPG v2 and then fetch the public key:
+
+    gpg --keyserver hkp://pool.sks-keyservers.net --recv-keys 409B6B1796C275462A1703113804BB82D39DC0E3 7D2BAF1CF37B13E2069D6956105BD0E739499BDB
+
+or if it fails:
+
+    command curl -sSL https://rvm.io/mpapis.asc | gpg --import -
+    command curl -sSL https://rvm.io/pkuczynski.asc | gpg --import -
+
+In case of further problems with validation please refer to https://rvm.io/rvm/security
+</pre></td></tr></tbody></table></code></pre></div></div>
+
+<p>根据提示，执行该命令获取密钥：</p>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+</pre></td><td class="rouge-code"><pre>gpg --keyserver hkp://pool.sks-keyservers.net --recv-keys 409B6B1796C275462A1703113804BB82D39DC0E3 7D2BAF1CF37B13E2069D6956105BD0E739499BDB
+</pre></td></tr></tbody></table></code></pre></div></div>
+
+<p>谁知又遇到了报错：</p>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+</pre></td><td class="rouge-code"><pre>gpg: 从公钥服务器接收失败：No route to host
+</pre></td></tr></tbody></table></code></pre></div></div>
+
+<p>后来在该链接找到办法：<a href="https://blog.csdn.net/tongwei117/article/details/79789111">mac cocoa pods 安装过程中出现问题</a></p>
+
+<p>该链接中，获取密钥的服务器路径是：hkp://keys.gnupg.net，
+换成该路径试试:</p>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+</pre></td><td class="rouge-code"><pre>gpg --keyserver hkp://keys.gnupg.net --recv-keys 409B6B1796C275462A1703113804BB82D39DC0E3 7D2BAF1CF37B13E2069D6956105BD0E739499BDB
+</pre></td></tr></tbody></table></code></pre></div></div>
+<p>居然成功了。。。有点搞笑的是，原文章里的作者尝试该服务器路径是失败了。。。哭笑不得.jpg
+<br />
+<br />
+<br />
+继续<br />
+安装 jekyll和 jekyll bundler：</p>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+</pre></td><td class="rouge-code"><pre>$ gem install jekyll
+$ gem install jekyll bundler
+</pre></td></tr></tbody></table></code></pre></div></div>
+
+<h3 id="遇到报错三">遇到报错三：</h3>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+</pre></td><td class="rouge-code"><pre>ERROR:  Could not find a valid gem 'jekyll' (&gt;= 0) in any repository
+</pre></td></tr></tbody></table></code></pre></div></div>
+<p>参考：
+<a href="https://www.iteye.com/blog/sunxboy-2217811">Could not find a valid gem ‘jekyll’ 安装jekyll问题解决</a>，
+输入命令检查源：</p>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+</pre></td><td class="rouge-code"><pre>$ gem sources -l
+</pre></td></tr></tbody></table></code></pre></div></div>
+<p>发现源为空，重新配置一下就好：</p>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+</pre></td><td class="rouge-code"><pre>gem sources -a https://rubygems.org/
+</pre></td></tr></tbody></table></code></pre></div></div>
+
+<p>重新执行安装命令，安装好后，显示：</p>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+</pre></td><td class="rouge-code"><pre>...
+Done installing documentation for bundler after 2 seconds
+2 gems installed
+</pre></td></tr></tbody></table></code></pre></div></div>
+
+<p>进入你的 Blog 所在目录，然后创建本地服务器：</p>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+</pre></td><td class="rouge-code"><pre>$ jekyll s
+</pre></td></tr></tbody></table></code></pre></div></div>
+<h3 id="遇到报错四">遇到报错四：</h3>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+</pre></td><td class="rouge-code"><pre>Dependency Error: Yikes! It looks like you don't have jekyll-paginate or one of its dependencies installed. 
+</pre></td></tr></tbody></table></code></pre></div></div>
+<p>安装 jekyll-paginate 即可：</p>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+</pre></td><td class="rouge-code"><pre>$ sudo gem install jekyll-paginate
+</pre></td></tr></tbody></table></code></pre></div></div>
+<p>你就可以在 http://127.0.0.1:4000/ 看到你的博客，你对本地博客的修改都会在这个地址进行显示，这大大提高了对博客的配置效率。<strong>使用ctrl+c就可以停止 serve</strong>
+<br />
+<br />
+补充，配置环境</p>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+</pre></td><td class="rouge-code"><pre>echo 'export PATH="/usr/local/lib/ruby/gems/2.6.0/gems/jekyll-4.0.0/exe:$PATH"' &gt;&gt; ~/.bash_profile
+</pre></td></tr></tbody></table></code></pre></div></div>
+:ET

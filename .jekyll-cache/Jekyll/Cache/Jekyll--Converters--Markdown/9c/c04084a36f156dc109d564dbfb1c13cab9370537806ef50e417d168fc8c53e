@@ -1,0 +1,795 @@
+I"؟<h1 id="概述">概述</h1>
+
+<p><a href="https://github.com/guoke24/AidlDemo">AidlDemo 项目参考</a>
+该 Github 项目有两个独立的项目，
+一个是 AidlClient，代表客户端；
+另一个是 AidlServer，代表服务端。</p>
+
+<h2 id="aidl-使用的三步曲">aidl 使用的三步曲：</h2>
+<ul>
+  <li>client，server 端都是采用相同的 aidl</li>
+  <li>server 端，new 一个 Stub 实例，并实现 aidl 中定义的函数，然后在 onBind 函数中返回 IBinder 类型的该 Stub 实例。</li>
+  <li>client 端，实现发起绑定逻辑，并在绑定完成的回调中拿到 IBinder 类型的参数，并通过 Stub.asInterfac 函数转变为代理类实例，用 aidl 接口依赖。</li>
+</ul>
+
+<p>下面以 <a href="https://github.com/guoke24/AidlDemo">AidlDemo 项目参考</a> 为例进行分析。</p>
+
+<h1 id="两端都用同一个-aidl">两端都用同一个 Aidl</h1>
+
+<p>Client 端的 aidl 路径：
+/AidlDemo/AidlClient/app/src/main/aidl/com/guohao/aidl/server/IBookManager.aidl</p>
+
+<p>Server 端的 aidl 路径：
+/AidlDemo/AidlServer/app/src/main/aidl/com/guohao/aidl/server/IBookManager.aidl</p>
+
+<p>aidl 源码：</p>
+
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+</pre></td><td class="rouge-code"><pre><span class="p">//</span> <span class="n">IBookManager</span><span class="p">.</span><span class="n">aidl</span>
+
+<span class="k">package</span> <span class="n">com</span><span class="p">.</span><span class="n">guohao</span><span class="p">.</span><span class="n">aidl</span><span class="p">.</span><span class="n">server</span><span class="p">;</span>
+<span class="n">interface</span> <span class="n">IBookManager</span> <span class="p">{</span>
+
+    <span class="n">int</span> <span class="n">add</span><span class="p">(</span><span class="n">int</span> <span class="n">num1</span><span class="p">,</span><span class="n">int</span> <span class="n">num2</span><span class="p">);</span>
+
+    <span class="n">int</span> <span class="n">wrong_add</span><span class="p">(</span><span class="n">int</span> <span class="n">num1</span><span class="p">,</span><span class="n">int</span> <span class="n">num2</span><span class="p">);</span>
+
+    <span class="n">int</span> <span class="n">more_fun</span><span class="p">();</span>
+<span class="p">}</span>
+</pre></td></tr></tbody></table></code></pre></div></div>
+
+<p><br />
+定义好的 aidl 接口，编译后会生成 java 文件：{工程根目录}/app/build/generated/source/aidl/debug/com/guohao/aidl/server/IBookManager.java</p>
+
+<p>源码如下：
+有点长，先看 IBookManager.java 接口的结构：</p>
+<ul>
+  <li>add 接口函数</li>
+  <li>wrong_add 接口函数</li>
+  <li>more_fun 接口函数</li>
+  <li>Stub 类
+    <ul>
+      <li>asBinder 函数</li>
+      <li>asInterface 函数，client 使用，把 server 的 IBinder 转成 Proxy</li>
+      <li>onTransact 函数，server 使用，接收 client 通信的回调</li>
+      <li>Proxy 类，client 使用
+        <ul>
+          <li>asBinder 函数</li>
+          <li>add 函数，向 Binder 驱动发送通信，继而转到 server 的 onTransact 函数</li>
+          <li>wrong_add 函数，同上</li>
+          <li>more_fun 函数，同上</li>
+        </ul>
+      </li>
+    </ul>
+  </li>
+</ul>
+
+<p>具体源码：</p>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39
+40
+41
+42
+43
+44
+45
+46
+47
+48
+49
+50
+51
+52
+53
+54
+55
+56
+57
+58
+59
+60
+61
+62
+63
+64
+65
+66
+67
+68
+69
+70
+71
+72
+73
+74
+75
+76
+77
+78
+79
+80
+81
+82
+83
+84
+85
+86
+87
+88
+89
+90
+91
+92
+93
+94
+95
+96
+97
+98
+99
+100
+101
+102
+103
+104
+105
+106
+107
+108
+109
+110
+111
+112
+113
+114
+115
+116
+117
+118
+119
+120
+121
+122
+123
+124
+125
+126
+127
+128
+129
+130
+131
+132
+133
+134
+135
+136
+137
+138
+139
+140
+141
+142
+143
+144
+145
+146
+147
+148
+149
+150
+151
+152
+153
+154
+155
+156
+157
+</pre></td><td class="rouge-code"><pre><span class="p">//</span> <span class="n">IBookManager</span><span class="p">.</span><span class="n">java</span>
+
+<span class="p">/*</span>
+ <span class="p">*</span> <span class="n">This</span> <span class="n">file</span> <span class="n">is</span> <span class="n">auto</span><span class="p">-</span><span class="n">generated</span><span class="p">.</span>  <span class="k">DO</span> <span class="k">NOT</span> <span class="n">MODIFY</span><span class="p">.</span>
+ <span class="p">*</span> <span class="n">Original</span> <span class="n">file</span><span class="p">:</span> <span class="p">/</span><span class="n">Users</span><span class="p">/</span><span class="n">guohao</span><span class="p">/</span><span class="n">AS_Proj</span><span class="p">/</span><span class="n">AidlDemo</span><span class="p">/</span><span class="n">AidlServer</span><span class="p">/</span><span class="n">app</span><span class="p">/</span><span class="n">src</span><span class="p">/</span><span class="n">main</span><span class="p">/</span><span class="n">aidl</span><span class="p">/</span><span class="n">com</span><span class="p">/</span><span class="n">guohao</span><span class="p">/</span><span class="n">aidl</span><span class="p">/</span><span class="n">server</span><span class="p">/</span><span class="n">IBookManager</span><span class="p">.</span><span class="n">aidl</span>
+ <span class="p">*/</span>
+<span class="k">package</span> <span class="n">com</span><span class="p">.</span><span class="n">guohao</span><span class="p">.</span><span class="n">aidl</span><span class="p">.</span><span class="n">server</span><span class="p">;</span>
+
+<span class="k">public</span> <span class="n">interface</span> <span class="n">IBookManager</span> <span class="n">extends</span> <span class="n">android</span><span class="p">.</span><span class="n">os</span><span class="p">.</span><span class="n">IInterface</span> <span class="p">{</span>
+    <span class="p">/**</span>
+     <span class="p">*</span> <span class="n">Local</span><span class="p">-</span><span class="n">side</span> <span class="n">IPC</span> <span class="n">implementation</span> <span class="n">stub</span> <span class="n">class</span><span class="p">.</span>
+     <span class="p">*/</span>
+    <span class="k">public</span> <span class="n">static</span> <span class="n">abstract</span> <span class="n">class</span> <span class="n">Stub</span> <span class="n">extends</span> <span class="n">android</span><span class="p">.</span><span class="n">os</span><span class="p">.</span><span class="n">Binder</span> <span class="n">implements</span> <span class="n">com</span><span class="p">.</span><span class="n">guohao</span><span class="p">.</span><span class="n">aidl</span><span class="p">.</span><span class="n">server</span><span class="p">.</span><span class="n">IBookManager</span> <span class="p">{</span>
+    
+        <span class="p">//</span> <span class="err">用于告诉</span> <span class="n">Binder</span> <span class="err">驱动，向哪个进程发起通信</span>
+        <span class="n">private</span> <span class="n">static</span> <span class="n">final</span> <span class="n">java</span><span class="p">.</span><span class="n">lang</span><span class="p">.</span><span class="k">String</span> <span class="n">DESCRIPTOR</span> <span class="p">=</span> <span class="s2">"com.guohao.aidl.server.IBookManager"</span><span class="p">;</span>
+
+        <span class="p">/**</span>
+         <span class="p">*</span> <span class="n">Construct</span> <span class="n">the</span> <span class="n">stub</span> <span class="n">at</span> <span class="n">attach</span> <span class="n">it</span> <span class="k">to</span> <span class="n">the</span> <span class="n">interface</span><span class="p">.</span>
+         <span class="p">*/</span>
+        <span class="k">public</span> <span class="n">Stub</span><span class="p">()</span> <span class="p">{</span>
+            <span class="n">this</span><span class="p">.</span><span class="n">attachInterface</span><span class="p">(</span><span class="n">this</span><span class="p">,</span> <span class="n">DESCRIPTOR</span><span class="p">);</span>
+        <span class="p">}</span>
+
+        <span class="p">/**</span>
+         <span class="p">*</span> <span class="n">Cast</span> <span class="n">an</span> <span class="n">IBinder</span> <span class="n">object</span> <span class="n">into</span> <span class="n">an</span> <span class="n">com</span><span class="p">.</span><span class="n">guohao</span><span class="p">.</span><span class="n">aidl</span><span class="p">.</span><span class="n">server</span><span class="p">.</span><span class="n">IBookManager</span> <span class="n">interface</span><span class="p">,</span>
+         <span class="p">*</span> <span class="n">generating</span> <span class="n">a</span> <span class="n">proxy</span> <span class="k">if</span> <span class="n">needed</span><span class="p">.</span>
+         <span class="p">*/</span>
+        <span class="k">public</span> <span class="n">static</span> <span class="n">com</span><span class="p">.</span><span class="n">guohao</span><span class="p">.</span><span class="n">aidl</span><span class="p">.</span><span class="n">server</span><span class="p">.</span><span class="n">IBookManager</span> <span class="n">asInterface</span><span class="p">(</span><span class="n">android</span><span class="p">.</span><span class="n">os</span><span class="p">.</span><span class="n">IBinder</span> <span class="n">obj</span><span class="p">)</span> <span class="p">{</span>
+            <span class="p">...</span>
+            <span class="n">android</span><span class="p">.</span><span class="n">os</span><span class="p">.</span><span class="n">IInterface</span> <span class="n">iin</span> <span class="p">=</span> <span class="n">obj</span><span class="p">.</span><span class="n">queryLocalInterface</span><span class="p">(</span><span class="n">DESCRIPTOR</span><span class="p">);</span>
+            <span class="k">if</span> <span class="p">(((</span><span class="n">iin</span> <span class="c1">!= null) &amp;&amp; (iin instanceof com.guohao.aidl.server.IBookManager))) {
+</span>                <span class="n">return</span> <span class="p">((</span><span class="n">com</span><span class="p">.</span><span class="n">guohao</span><span class="p">.</span><span class="n">aidl</span><span class="p">.</span><span class="n">server</span><span class="p">.</span><span class="n">IBookManager</span><span class="p">)</span> <span class="n">iin</span><span class="p">);</span>
+            <span class="p">}</span>
+            <span class="n">return</span> <span class="n">new</span> <span class="n">com</span><span class="p">.</span><span class="n">guohao</span><span class="p">.</span><span class="n">aidl</span><span class="p">.</span><span class="n">server</span><span class="p">.</span><span class="n">IBookManager</span><span class="p">.</span><span class="n">Stub</span><span class="p">.</span><span class="n">Proxy</span><span class="p">(</span><span class="n">obj</span><span class="p">);</span>
+        <span class="p">}</span>
+
+        <span class="p">//</span>
+        <span class="p">@</span><span class="n">Override</span>
+        <span class="k">public</span> <span class="n">android</span><span class="p">.</span><span class="n">os</span><span class="p">.</span><span class="n">IBinder</span> <span class="n">asBinder</span><span class="p">()</span> <span class="p">{</span>
+            <span class="n">return</span> <span class="n">this</span><span class="p">;</span>
+        <span class="p">}</span>
+
+        <span class="p">//</span> <span class="err">在</span> <span class="n">server</span> <span class="err">端被调用，接收</span> <span class="n">client</span> <span class="err">通信的回调</span>
+        <span class="p">@</span><span class="n">Override</span>
+        <span class="k">public</span> <span class="k">boolean</span> <span class="n">onTransact</span><span class="p">(</span><span class="n">int</span> <span class="n">code</span><span class="p">,</span> <span class="n">android</span><span class="p">.</span><span class="n">os</span><span class="p">.</span><span class="n">Parcel</span> <span class="n">data</span><span class="p">,</span> <span class="n">android</span><span class="p">.</span><span class="n">os</span><span class="p">.</span><span class="n">Parcel</span> <span class="n">reply</span><span class="p">,</span> <span class="n">int</span> <span class="n">flags</span><span class="p">)</span> <span class="n">throws</span> <span class="n">android</span><span class="p">.</span><span class="n">os</span><span class="p">.</span><span class="n">RemoteException</span> <span class="p">{</span>
+            <span class="n">java</span><span class="p">.</span><span class="n">lang</span><span class="p">.</span><span class="k">String</span> <span class="n">descriptor</span> <span class="p">=</span> <span class="n">DESCRIPTOR</span><span class="p">;</span>
+            <span class="n">switch</span> <span class="p">(</span><span class="n">code</span><span class="p">)</span> <span class="p">{</span>
+                <span class="k">case</span> <span class="n">INTERFACE_TRANSACTION</span><span class="p">:</span> <span class="p">{</span>
+                    <span class="n">reply</span><span class="p">.</span><span class="n">writeString</span><span class="p">(</span><span class="n">descriptor</span><span class="p">);</span>
+                    <span class="n">return</span> <span class="nb">true</span><span class="p">;</span>
+                <span class="p">}</span>
+                <span class="k">case</span> <span class="n">TRANSACTION_add</span><span class="p">:</span> <span class="p">{</span>
+                    <span class="n">data</span><span class="p">.</span><span class="n">enforceInterface</span><span class="p">(</span><span class="n">descriptor</span><span class="p">);</span>
+                    <span class="n">int</span> <span class="n">_arg0</span><span class="p">;</span>
+                    <span class="n">_arg0</span> <span class="p">=</span> <span class="n">data</span><span class="p">.</span><span class="n">readInt</span><span class="p">();</span>
+                    <span class="n">int</span> <span class="n">_arg1</span><span class="p">;</span>
+                    <span class="n">_arg1</span> <span class="p">=</span> <span class="n">data</span><span class="p">.</span><span class="n">readInt</span><span class="p">();</span>
+                    <span class="n">int</span> <span class="n">_result</span> <span class="p">=</span> <span class="n">this</span><span class="p">.</span><span class="n">add</span><span class="p">(</span><span class="n">_arg0</span><span class="p">,</span> <span class="n">_arg1</span><span class="p">);</span>
+                    <span class="n">reply</span><span class="p">.</span><span class="n">writeNoException</span><span class="p">();</span>
+                    <span class="n">reply</span><span class="p">.</span><span class="n">writeInt</span><span class="p">(</span><span class="n">_result</span><span class="p">);</span>
+                    <span class="n">return</span> <span class="nb">true</span><span class="p">;</span>
+                <span class="p">}</span>
+                <span class="k">case</span> <span class="n">TRANSACTION_wrong_add</span><span class="p">:</span> <span class="p">{</span>
+                    <span class="p">...</span>
+                    <span class="n">int</span> <span class="n">_result</span> <span class="p">=</span> <span class="n">this</span><span class="p">.</span><span class="n">wrong_add</span><span class="p">(</span><span class="n">_arg0</span><span class="p">,</span> <span class="n">_arg1</span><span class="p">);</span>
+                    <span class="p">...</span>
+                    <span class="n">return</span> <span class="nb">true</span><span class="p">;</span>
+                <span class="p">}</span>
+                <span class="k">case</span> <span class="n">TRANSACTION_more_fun</span><span class="p">:</span> <span class="p">{</span>
+                    <span class="n">data</span><span class="p">.</span><span class="n">enforceInterface</span><span class="p">(</span><span class="n">descriptor</span><span class="p">);</span>
+                    <span class="n">int</span> <span class="n">_result</span> <span class="p">=</span> <span class="n">this</span><span class="p">.</span><span class="n">more_fun</span><span class="p">();</span>
+                    <span class="p">...</span>
+                    <span class="n">return</span> <span class="nb">true</span><span class="p">;</span>
+                <span class="p">}</span>
+                <span class="n">default</span><span class="p">:</span> <span class="p">{</span>
+                    <span class="n">return</span> <span class="n">super</span><span class="p">.</span><span class="n">onTransact</span><span class="p">(</span><span class="n">code</span><span class="p">,</span> <span class="n">data</span><span class="p">,</span> <span class="n">reply</span><span class="p">,</span> <span class="n">flags</span><span class="p">);</span>
+                <span class="p">}</span>
+            <span class="p">}</span>
+        <span class="p">}</span>
+
+        <span class="p">//</span> <span class="err">在</span> <span class="n">client</span> <span class="err">端持有实例，通过</span> <span class="n">mRemote</span><span class="p">.</span><span class="n">transact</span> <span class="err">函数向</span> <span class="n">Binder</span> <span class="err">驱动发起跨进程通信</span>
+        <span class="n">private</span> <span class="n">static</span> <span class="n">class</span> <span class="n">Proxy</span> <span class="n">implements</span> <span class="n">com</span><span class="p">.</span><span class="n">guohao</span><span class="p">.</span><span class="n">aidl</span><span class="p">.</span><span class="n">server</span><span class="p">.</span><span class="n">IBookManager</span> <span class="p">{</span>
+            <span class="n">private</span> <span class="n">android</span><span class="p">.</span><span class="n">os</span><span class="p">.</span><span class="n">IBinder</span> <span class="n">mRemote</span><span class="p">;</span>
+
+            <span class="n">Proxy</span><span class="p">(</span><span class="n">android</span><span class="p">.</span><span class="n">os</span><span class="p">.</span><span class="n">IBinder</span> <span class="n">remote</span><span class="p">)</span> <span class="p">{</span>
+                <span class="n">mRemote</span> <span class="p">=</span> <span class="n">remote</span><span class="p">;</span>
+            <span class="p">}</span>
+
+            <span class="p">@</span><span class="n">Override</span>
+            <span class="k">public</span> <span class="n">android</span><span class="p">.</span><span class="n">os</span><span class="p">.</span><span class="n">IBinder</span> <span class="n">asBinder</span><span class="p">()</span> <span class="p">{</span>
+                <span class="n">return</span> <span class="n">mRemote</span><span class="p">;</span>
+            <span class="p">}</span>
+
+            <span class="k">public</span> <span class="n">java</span><span class="p">.</span><span class="n">lang</span><span class="p">.</span><span class="k">String</span> <span class="n">getInterfaceDescriptor</span><span class="p">()</span> <span class="p">{</span>
+                <span class="n">return</span> <span class="n">DESCRIPTOR</span><span class="p">;</span>
+            <span class="p">}</span>
+
+            <span class="p">@</span><span class="n">Override</span>
+            <span class="k">public</span> <span class="n">int</span> <span class="n">add</span><span class="p">(</span><span class="n">int</span> <span class="n">num1</span><span class="p">,</span> <span class="n">int</span> <span class="n">num2</span><span class="p">)</span> <span class="n">throws</span> <span class="n">android</span><span class="p">.</span><span class="n">os</span><span class="p">.</span><span class="n">RemoteException</span> <span class="p">{</span>
+                <span class="n">android</span><span class="p">.</span><span class="n">os</span><span class="p">.</span><span class="n">Parcel</span> <span class="n">_data</span> <span class="p">=</span> <span class="n">android</span><span class="p">.</span><span class="n">os</span><span class="p">.</span><span class="n">Parcel</span><span class="p">.</span><span class="n">obtain</span><span class="p">();</span>
+                <span class="n">android</span><span class="p">.</span><span class="n">os</span><span class="p">.</span><span class="n">Parcel</span> <span class="n">_reply</span> <span class="p">=</span> <span class="n">android</span><span class="p">.</span><span class="n">os</span><span class="p">.</span><span class="n">Parcel</span><span class="p">.</span><span class="n">obtain</span><span class="p">();</span>
+                <span class="n">int</span> <span class="n">_result</span><span class="p">;</span>
+                <span class="n">try</span> <span class="p">{</span>
+                    <span class="n">_data</span><span class="p">.</span><span class="n">writeInterfaceToken</span><span class="p">(</span><span class="n">DESCRIPTOR</span><span class="p">);</span>
+                    <span class="n">_data</span><span class="p">.</span><span class="n">writeInt</span><span class="p">(</span><span class="n">num1</span><span class="p">);</span>
+                    <span class="n">_data</span><span class="p">.</span><span class="n">writeInt</span><span class="p">(</span><span class="n">num2</span><span class="p">);</span>
+                    <span class="n">mRemote</span><span class="p">.</span><span class="n">transact</span><span class="p">(</span><span class="n">Stub</span><span class="p">.</span><span class="n">TRANSACTION_add</span><span class="p">,</span> <span class="n">_data</span><span class="p">,</span> <span class="n">_reply</span><span class="p">,</span> <span class="m">0</span><span class="p">);</span>
+                    <span class="n">_reply</span><span class="p">.</span><span class="n">readException</span><span class="p">();</span>
+                    <span class="n">_result</span> <span class="p">=</span> <span class="n">_reply</span><span class="p">.</span><span class="n">readInt</span><span class="p">();</span>
+                <span class="p">}</span> <span class="n">finally</span> <span class="p">{</span>
+                    <span class="n">_reply</span><span class="p">.</span><span class="n">recycle</span><span class="p">();</span>
+                    <span class="n">_data</span><span class="p">.</span><span class="n">recycle</span><span class="p">();</span>
+                <span class="p">}</span>
+                <span class="n">return</span> <span class="n">_result</span><span class="p">;</span>
+            <span class="p">}</span>
+
+            <span class="p">@</span><span class="n">Override</span>
+            <span class="k">public</span> <span class="n">int</span> <span class="n">wrong_add</span><span class="p">(</span><span class="n">int</span> <span class="n">num1</span><span class="p">,</span> <span class="n">int</span> <span class="n">num2</span><span class="p">)</span> <span class="n">throws</span> <span class="n">android</span><span class="p">.</span><span class="n">os</span><span class="p">.</span><span class="n">RemoteException</span> <span class="p">{</span>
+                <span class="p">...</span>
+                <span class="n">try</span> <span class="p">{</span>
+                    <span class="p">...</span>
+                    <span class="n">mRemote</span><span class="p">.</span><span class="n">transact</span><span class="p">(</span><span class="n">Stub</span><span class="p">.</span><span class="n">TRANSACTION_wrong_add</span><span class="p">,</span> <span class="n">_data</span><span class="p">,</span> <span class="n">_reply</span><span class="p">,</span> <span class="m">0</span><span class="p">);</span>
+                    <span class="p">...</span>
+                <span class="p">}</span> <span class="n">finally</span> <span class="p">{</span>
+                    <span class="p">...</span>
+                <span class="p">}</span>
+                <span class="n">return</span> <span class="n">_result</span><span class="p">;</span>
+            <span class="p">}</span>
+
+            <span class="p">@</span><span class="n">Override</span>
+            <span class="k">public</span> <span class="n">int</span> <span class="n">more_fun</span><span class="p">()</span> <span class="n">throws</span> <span class="n">android</span><span class="p">.</span><span class="n">os</span><span class="p">.</span><span class="n">RemoteException</span> <span class="p">{</span>
+                <span class="p">...</span>
+                <span class="n">try</span> <span class="p">{</span>
+                    <span class="n">_data</span><span class="p">.</span><span class="n">writeInterfaceToken</span><span class="p">(</span><span class="n">DESCRIPTOR</span><span class="p">);</span>
+                    <span class="n">mRemote</span><span class="p">.</span><span class="n">transact</span><span class="p">(</span><span class="n">Stub</span><span class="p">.</span><span class="n">TRANSACTION_more_fun</span><span class="p">,</span> <span class="n">_data</span><span class="p">,</span> <span class="n">_reply</span><span class="p">,</span> <span class="m">0</span><span class="p">);</span>
+                    <span class="p">...</span>
+                <span class="p">}</span> <span class="n">finally</span> <span class="p">{</span>
+                    <span class="p">...</span>
+                <span class="p">}</span>
+                <span class="n">return</span> <span class="n">_result</span><span class="p">;</span>
+            <span class="p">}</span>
+        <span class="p">}</span>
+
+        <span class="p">//</span> <span class="n">mRemote</span><span class="p">.</span><span class="n">transact</span> <span class="err">函数时会使用的标志位，用于识别调用哪个函数</span>
+        <span class="n">static</span> <span class="n">final</span> <span class="n">int</span> <span class="n">TRANSACTION_add</span> <span class="p">=</span> <span class="p">(</span><span class="n">android</span><span class="p">.</span><span class="n">os</span><span class="p">.</span><span class="n">IBinder</span><span class="p">.</span><span class="n">FIRST_CALL_TRANSACTION</span> <span class="p">+</span> <span class="m">0</span><span class="p">);</span>
+        <span class="n">static</span> <span class="n">final</span> <span class="n">int</span> <span class="n">TRANSACTION_wrong_add</span> <span class="p">=</span> <span class="p">(</span><span class="n">android</span><span class="p">.</span><span class="n">os</span><span class="p">.</span><span class="n">IBinder</span><span class="p">.</span><span class="n">FIRST_CALL_TRANSACTION</span> <span class="p">+</span> <span class="m">1</span><span class="p">);</span>
+        <span class="n">static</span> <span class="n">final</span> <span class="n">int</span> <span class="n">TRANSACTION_more_fun</span> <span class="p">=</span> <span class="p">(</span><span class="n">android</span><span class="p">.</span><span class="n">os</span><span class="p">.</span><span class="n">IBinder</span><span class="p">.</span><span class="n">FIRST_CALL_TRANSACTION</span> <span class="p">+</span> <span class="m">2</span><span class="p">);</span>
+    <span class="p">}</span>
+
+    <span class="k">public</span> <span class="n">int</span> <span class="n">add</span><span class="p">(</span><span class="n">int</span> <span class="n">num1</span><span class="p">,</span> <span class="n">int</span> <span class="n">num2</span><span class="p">)</span> <span class="n">throws</span> <span class="n">android</span><span class="p">.</span><span class="n">os</span><span class="p">.</span><span class="n">RemoteException</span><span class="p">;</span>
+
+    <span class="k">public</span> <span class="n">int</span> <span class="n">wrong_add</span><span class="p">(</span><span class="n">int</span> <span class="n">num1</span><span class="p">,</span> <span class="n">int</span> <span class="n">num2</span><span class="p">)</span> <span class="n">throws</span> <span class="n">android</span><span class="p">.</span><span class="n">os</span><span class="p">.</span><span class="n">RemoteException</span><span class="p">;</span>
+
+    <span class="k">public</span> <span class="n">int</span> <span class="n">more_fun</span><span class="p">()</span> <span class="n">throws</span> <span class="n">android</span><span class="p">.</span><span class="n">os</span><span class="p">.</span><span class="n">RemoteException</span><span class="p">;</span>
+<span class="p">}</span>
+
+</pre></td></tr></tbody></table></code></pre></div></div>
+
+<h1 id="server端的实现">server端的实现</h1>
+
+<p>server 端的工作：</p>
+<blockquote>
+  <p>new 一个 Stub 实例，并实现 aidl 中定义的函数，然后在 onBind 函数中返回 IBinder 类型的该 Stub 实例</p>
+</blockquote>
+
+<p>源码：</p>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+</pre></td><td class="rouge-code"><pre>// AidlService.java
+
+public class AidlService extends Service {
+    public AidlService() {
+    }
+
+    @Override
+    public IBinder onBind(Intent intent) {
+        // TODO: Return the communication channel to the service.
+        
+        // 返回接口 IBookManager.Stub 实例
+        return aidlServer;
+    }
+
+    // 声明并实现 IBookManager 接口的 stub 类实例
+    IBookManager.Stub aidlServer = new IBookManager.Stub(){
+
+        @Override
+        public int add(int num1, int num2) throws RemoteException {
+            Log.d("guohao","add...num1 = " + num1 + " ,num2 = " + num2 );
+            return ( num1 + num2 );
+        }
+
+        @Override
+        public int wrong_add(int num1, int num2) throws RemoteException {
+            Log.d("guohao","wrong_add...num1 = " + num1 + " ,num2 = " + num2 );
+            return ( num1 + num2 );
+        }
+
+        @Override
+        public int more_fun() throws RemoteException {
+            Log.d("guohao","more_fun..." );
+            return 0;
+        }
+
+    };
+    // end 声明并实现 接口的stub对象
+}
+</pre></td></tr></tbody></table></code></pre></div></div>
+
+<h1 id="client端的实现">client端的实现</h1>
+
+<p>client 端工作</p>
+<blockquote>
+  <p>实现发起绑定逻辑，并在绑定完成的回调中拿到 IBinder 类型的参数，并通过 Stub.asInterfac 函数转变为代理类实例，用 aidl 接口依赖。</p>
+</blockquote>
+
+<p>源码：</p>
+
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39
+40
+41
+42
+43
+44
+45
+46
+47
+48
+49
+50
+51
+52
+53
+54
+55
+56
+57
+58
+59
+60
+61
+62
+63
+64
+65
+66
+67
+68
+69
+70
+71
+72
+73
+</pre></td><td class="rouge-code"><pre>// MainActivity.java
+
+    private IBookManager mIBookManager;
+
+    // 创建跟服务端的连接
+    private ServiceConnection mConnection = new ServiceConnection() {
+        @Override
+        public void onServiceConnected(ComponentName name, IBinder service) {
+            // 获取远程服务Binder的代理：service
+            Log.d("guohao","onServiceConnected");
+            // service 转化为 本地的 mIBookManager 接口
+            // asInterface 返回的是代理类 IBookManager.Stub.Proxy
+            // 通过 IBookManager 接口依赖
+            mIBookManager = IBookManager.Stub.asInterface(service);
+            // 注意：本地的 IBookManager 接口，只定义了两个函数，
+            // 而服务端的  IBookManager 接口，定义了三个函数，
+            // 但是，这里不会因为函数不一致而报错
+        }
+        @Override
+        public void onServiceDisconnected(ComponentName name) {
+            Log.d("guohao","onServiceDisconnected");
+        }
+    };
+    // end 创建跟服务端的连接
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_main);
+    }
+
+    // 发起绑定服务
+    private boolean bindBookService(){
+        Intent intent = new Intent();
+        // 指定 action，要绑定的服务类，在服务端的清单文件里定义
+        intent.setAction("com.guohao.aidl.server.aidlService");
+        // 指定 包名，服务端的包名
+        intent.setPackage("com.guohao.aidlserver");
+        startService(intent);
+        return bindService(intent, mConnection, BIND_AUTO_CREATE);
+    }
+    // end 发起绑定服务
+
+    public void test(View v){
+        Log.d("guohao","test2");
+        // 调用 绑定服务
+        boolean b = bindBookService();
+        if(b){
+            Toast.makeText(this,"bind succ",Toast.LENGTH_SHORT).show();
+        }else{
+            Toast.makeText(this,"bind fail",Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    public void test2(View v){
+        Log.d("guohao","test2");
+        if(mIBookManager == null) {
+            Log.d("guohao","未绑定服务");
+            Toast.makeText(this,"未绑定服务" ,Toast.LENGTH_SHORT).show();
+            return;
+        }
+        try {
+            // 发起 远程调用
+            int res = mIBookManager.add(1,1);
+            Log.d("guohao","res = " + res);
+            Toast.makeText(this,"mIBookManager.add(1,1) = " + res,Toast.LENGTH_SHORT).show();
+
+        } catch (RemoteException e) {
+            Log.d("guohao","e = " + e.toString());
+            e.printStackTrace();
+        }
+
+    }
+</pre></td></tr></tbody></table></code></pre></div></div>
+
+<h1 id="时序图小结">时序图小结</h1>
+<p>简单的绑定过程：</p>
+
+<pre><code class="language-mermaid">sequenceDiagram
+
+aidlclient -&gt;&gt; aidlclient:         intent.setAction("com.guohao.aidl.server.aidlService");
+
+aidlclient -&gt;&gt; aidlclient:         intent.setPackage("com.guohao.aidlserver")
+
+aidlclient -&gt;&gt; aidlserver: bindService(intent, mConnection, BIND_AUTO_CREATE)
+
+aidlserver -&gt;&gt; aidlserver: onBind
+
+Note left of aidlserver: 实现 IBookManager 的三个接口函数
+
+aidlserver -&gt;&gt; aidlclient: conn.onServiceConnected( service )
+
+</code></pre>
+
+<p><br /></p>
+
+<p>详细的绑定过程：</p>
+
+<pre><code class="language-mermaid">sequenceDiagram
+aidlclient -&gt;&gt; aidlclient:         intent.setAction("com.guohao.aidl.server.aidlService");
+
+aidlclient -&gt;&gt; aidlclient:         intent.setPackage("com.guohao.aidlserver")
+
+aidlclient -&gt;&gt; ContextImpl: 3，ContextWrapper.bindService(intent, conn, BIND_AUTO_CREATE)
+
+ContextImpl -&gt;&gt; ContextImpl: sd = mPackageInfo.getServiceDispatcher(conn,
+Note right of ContextImpl: mPackageInfo 就是 LoadedApk
+Note right of ContextImpl: 在 LoadedApk 的 getServiceDispatcher 函数中：
+Note right of ContextImpl: sd = new ServiceDispatcher(conn, context,
+Note right of ContextImpl: mServices.put(context, map)，context 是某个Activity
+Note right of ContextImpl: map.put(conn, sd)
+Note right of ContextImpl: return sd.getIServiceConnection
+Note right of ContextImpl: 在 ServiceDispatcher 的 getIServiceConnection 函数中：
+Note right of ContextImpl: mIServiceConnection = new InnerConnection(this)
+Note right of ContextImpl: 	mConnection = conn;
+Note right of ContextImpl: return mIServiceConnection
+
+Note left of ContextImpl: 即 sd 就是 InnerConnection
+
+
+ContextImpl -&gt;&gt; AMS : bindService（ token, intent, sd , ...）
+
+AMS -&gt;&gt; AMS : ConnectionRecord c = new ConnectionRecord( ... , sd , ... );
+
+AMS --&gt;&gt; ActivtyThread: 8，app.thread.scheduleCreateService(r, r.serviceInfo);
+
+ActivtyThread -&gt;&gt; aidlserver: ActivtyThread.H - onCreate
+
+AMS -&gt;&gt; ActivtyThread: requestServiceBindingsLocked(r)
+
+ActivtyThread -&gt;&gt;+ aidlserver: ActivtyThread.H - onBind
+
+aidlserver -&gt;&gt; aidlserver: aidlServer = new IBookManager.Stub()
+
+Note left of aidlserver: 实现 IBookManager 的三个接口函数
+
+aidlserver -&gt;&gt;- ActivtyThread: 14，(IBinder)aidlServer
+
+ActivtyThread -&gt;&gt; AMS: publishService( service = aidlServer )
+
+AMS -&gt;&gt; AMS: ConnectionRecord c = clist.get(i)
+AMS -&gt;&gt; AMS: 17，c.conn.connected(r.name, service)
+
+Note left of AMS: c.conn 就是 sd，即 InnerConnection
+Note left of AMS: -&gt; InnerConnection.connected(r.name, service)
+Note left of AMS: -&gt; ServiceDispatcher.connected( service )
+Note left of AMS: -&gt; RunConnection.run( service )
+Note left of AMS: -&gt; ServiceDispatcher.doConnected( service )
+Note left of AMS: -&gt; mConnection.onServiceConnected( service )
+
+AMS -&gt;&gt; aidlclient: conn.onServiceConnected( service )
+
+aidlclient -&gt;&gt; aidlclient: mIBookManager = IBookManager.Stub.asInterface(service)
+
+#AMS -&gt;&gt; aidlclient: 绑定失败，onServiceDisconnected
+
+</code></pre>
+
+<p>其中 bindService 函数的 <a href="https://blog.csdn.net/luoshengyang/article/details/6745181">老罗的源码分析</a>，<a href="https://www.cnblogs.com/zhchoutai/p/8681312.html">另一篇源码分析（图清楚）</a></p>
+
+<p>小结：
+conn 在 ServiceDispatcher 实例中，
+ServiceDispatcher 实例在 InnerConnection 实例中，
+AMS 中持有 InnerConnection 实例，
+在 AMS 中通过 InnerConnection - ServiceDispatcher - RunConnection.run - conn.onServiceConnected 层层调用，完成绑定通知。</p>
+
+<p><br />
+跨进程通信过程：</p>
+
+<pre><code class="language-mermaid">sequenceDiagram
+
+aidlclient -&gt;&gt; (C端)IBookManager.Stub.Proxy : mIBookManager.add(1,1)
+
+(C端)IBookManager.Stub.Proxy -&gt;&gt; (C端)IBookManager.Stub.Proxy : _data.writeInt(num1);
+(C端)IBookManager.Stub.Proxy -&gt;&gt; (C端)IBookManager.Stub.Proxy : _data.writeInt(num2);
+(C端)IBookManager.Stub.Proxy -&gt;&gt; Binder 驱动 : mRemote.transact(Stub.TRANSACTION_add, _data, _reply, 0);
+
+Note right of Binder 驱动 : Binder 内部共享内存
+
+Binder 驱动 -&gt;&gt; (S端)IBookManager.Stub : onTransact
+
+(S端)IBookManager.Stub -&gt;&gt;+ (S端)IBookManager.Stub : case TRANSACTION_add:
+
+(S端)IBookManager.Stub -&gt;&gt; (S端)IBookManager.Stub : _arg0 = data.readInt()，_arg1 = data.readInt();
+
+(S端)IBookManager.Stub -&gt;&gt;- aidlserver : int _result = this.add(_arg0, _arg1);
+
+aidlserver -&gt;&gt; aidlserver : （IBookManager.Stub）aidlServer 实现的 add 函数
+
+</code></pre>
+
+<h1 id="测试了接口不一致不会报错">测试了接口不一致，不会报错</h1>
+<ul>
+  <li>server 端的 IBookManager接口，函数声明为：
+    <div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+</pre></td><td class="rouge-code"><pre><span class="k">package</span> <span class="n">com</span><span class="p">.</span><span class="n">guohao</span><span class="p">.</span><span class="n">aidl</span><span class="p">.</span><span class="n">server</span><span class="p">;</span>
+<span class="n">interface</span> <span class="n">IBookManager</span> <span class="p">{</span>
+
+  <span class="n">int</span> <span class="n">add</span><span class="p">(</span><span class="n">int</span> <span class="n">num1</span><span class="p">,</span><span class="n">int</span> <span class="n">num2</span><span class="p">);</span>
+
+  <span class="n">int</span> <span class="n">wrong_add</span><span class="p">(</span><span class="n">int</span> <span class="n">num1</span><span class="p">,</span><span class="n">int</span> <span class="n">num2</span><span class="p">);</span>
+
+  <span class="n">int</span> <span class="n">more_fun</span><span class="p">();</span>
+<span class="p">}</span>
+</pre></td></tr></tbody></table></code></pre></div>    </div>
+  </li>
+  <li>client 端的 IBookManager接口，函数声明为：
+```</li>
+</ul>
+
+<p>interface IBookManager {</p>
+
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+</pre></td><td class="rouge-code"><pre>int add(int num1,int num2);
+
+// 服务端定义了该函数会多一个参数 wrong_add(int num1,int num2)
+int wrong_add(int num1); } ```
+</pre></td></tr></tbody></table></code></pre></div></div>
+
+<ul>
+  <li>结果：绑定服务不会报错，调用 wrong_add 函数也不会报错，缺失的参数 num2 默认为 0</li>
+</ul>
+:ET
