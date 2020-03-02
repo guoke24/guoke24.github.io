@@ -1,5 +1,0 @@
-I"�<h4 id="前言">前言</h4>
-<p>ActivityThread 是消息驱动的活生生的经典案例！<br />
-ActivityThread 的 main 函数 Looper.loop() 阻塞，<br />
-Application 给 ActivityThread 发消息。<br /></p>
-:ET
