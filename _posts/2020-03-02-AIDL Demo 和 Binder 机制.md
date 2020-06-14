@@ -1,16 +1,17 @@
 ---
-layout:     post
-title:      "AIDL Demo 和 Binder 机制"
-subtitle:   "read the fxxking source code"
-date:       2020-03-01 12:00:00
-author:     "GuoHao"
-header-img: "img/waittouse.jpg"
-catalog: true
-tags:
-    - Android
-    - 源码
-    - AIDL
-    - Binder
+layout:     post  
+title:      "AIDL Demo 和 Binder 机制"  
+subtitle:   "主要是 Demo，顺便看看 Binder 机制的皮毛"  
+date:       2020-03-01 12:00:00  
+author:     "GuoHao"  
+header-img: "img/waittouse.jpg"  
+catalog: true  
+tags:  
+    - Android  
+    - 源码  
+    - AIDL  
+    - Binder  
+
 ---
 
 

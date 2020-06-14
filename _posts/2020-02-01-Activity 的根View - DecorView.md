@@ -1,15 +1,14 @@
 ---
 layout:     post
 title:      "Activity 的根View - DecorView"
-subtitle:   "read the fxxking source code"
+subtitle:   "Activity 界面是一个 ViewTree"
 date:       2020-02-01 12:00:00
 author:     "GuoHao"
-header-img: "img/waittouse.jpg"
+header-img: "img/tag-bg.jpg"
 catalog: true
 tags:
     - Android
     - 源码
-    - View 工作原理
     - View
 ---
 

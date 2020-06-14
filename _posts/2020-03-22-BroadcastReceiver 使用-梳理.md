@@ -1,0 +1,115 @@
+---
+layout:     post  
+title:      "BroadcastReceiver 使用-梳理"  
+subtitle:   "小喇叭人人能听见"  
+date:       2020-03-22 12:00:00  
+author:     "GuoHao"  
+header-img: "img/waittouse.jpg"  
+catalog: true  
+tags:  
+    - Android  
+    - 源码  
+    - BroadcastReceiver  
+    - 四大组件  
+
+---
+
+## 参考
+
+[1，BroadcastReceiver详解，其实比较简单](https://blog.csdn.net/hejinhbue/article/details/79940796?depth_1-utm_source=distribute.pc_relevant.none-task-blog-BlogCommendFromBaidu-1&utm_source=distribute.pc_relevant.none-task-blog-BlogCommendFromBaidu-1)
+
+[2，BroadcastReceiver详解，比较详细](https://blog.csdn.net/harvic880925/article/details/38710901)
+
+## 要点
+
+### 动态静态注册
+
+动态在代码注册
+
+静态在 AndroidManifest.xml 清单文件注册
+
+### 无序有序广播
+
+#### 无序广播
+
+就是没有设置优先级的广播，
+
+#### 有序广播
+
+设置优先级，优先级高的广播接收器，越早接收到相应广播
+
+### 权限
+
+> 有个地方要注意：即便像我们现在这样，自己的应用发出广播给自己接收，但如果不声明使用权限，是不能接收到广播的。这点与Activity的权限机制不一样
+
+有关权限的声明与使用，可以参考这篇文章：《[声明、使用与自定义权限》](https://blog.csdn.net/harvic880925/article/details/38683625)
+
+首先创建一个"harvic.broadcast.perssion"权限
+
+```
+<permission android:name="harvic.broadcast.perssion" android:protectionLevel="normal"></permission> 
+```
+
+然后是底部声明，我们要使用这个权限：
+
+```
+<uses-permission  android:name="harvic.broadcast.perssion"/>
+```
+
+
+## 小结
+
+关于广播的使用方法，可研究的不多；
+
+重点之一在于应用场景：
+
+其实在单个应用内使用广播的概率比较小，毕竟应用内相互通信还有很多其他方式，比如：
+
+- Handler
+- intent
+    - startActivity、startService 和 sendBroadcast 等
+- Evnetbus
+- SharePreference
+- 回调接口
+- 暴露接口，引用调用
+
+所以很多时候只有在进程间通信才会使用广播，比如接收开机广播，监听应用安装和卸载等；
+
+重点之二在于广播的性能：
+
+参考：https://www.cnblogs.com/lwbqqyumidi/p/4168017.html ，引用：
+
+> 1.Android广播机制概述
+
+> Android广播分为两个方面：广播发送者和广播接收者，通常情况下，BroadcastReceiver指的就是广播接收者（广播接收器）。广播作为Android组件间的通信方式，可以使用的场景如下：
+> 1.同一app内部的同一组件内的消息通信（单个或多个线程之间）；
+
+> 2.同一app内部的不同组件之间的消息通信（单个进程）；
+
+> 3.同一app具有多个进程的不同组件之间的消息通信；
+
+> 4.不同app之间的组件之间消息通信；
+
+> 5.Android系统在特定情况下与App之间的消息通信。
+
+> 从实现原理看上，Android中的广播使用了观察者模式，基于消息的发布/订阅事件模型。因此，从实现的角度来看，Android中的广播将广播的发送者和接受者极大程度上解耦，使得系统能够方便集成，更易扩展。具体实现流程要点粗略概括如下：
+
+> 1.广播接收者BroadcastReceiver通过Binder机制向AMS(Activity Manager Service)进行注册；
+
+> 2.广播发送者通过binder机制向AMS发送广播；
+
+> 3.AMS查找符合相应条件（IntentFilter/Permission等）的BroadcastReceiver，将广播发送到BroadcastReceiver（一般情况下是Activity）相应的消息循环队列中；
+
+> 4.消息循环执行拿到此广播，回调BroadcastReceiver中的onReceive()方法。
+
+>  对于不同的广播类型，以及不同的BroadcastReceiver注册方式，具体实现上会有不同。但总体流程大致如上。
+
+> 由此看来，**广播发送者和广播接收者分别属于观察者模式中的消息发布和订阅两端，AMS属于中间的处理中心。**广播发送者和广播接收者的执行是异步的，发出去的广播不会关心有无接收者接收，也不确定接收者到底是何时才能接收到。显然，整体流程与EventBus非常类似。
+
+> 在上文说列举的广播机制具体可以使用的场景中，现分析实际应用中的适用性：
+
+> 第一种情形：同一app内部的同一组件内的消息通信（单个或多个线程之间），实际应用中肯定是不会用到广播机制的（虽然可以用），无论是使用扩展变量作用域、基于接口的回调还是Handler-post/Handler-Message等方式，都可以直接处理此类问题，若适用广播机制，显然有些“杀鸡牛刀”的感觉，会显太“重”；
+
+> 第二种情形：同一app内部的不同组件之间的消息通信（单个进程），对于此类需求，在有些教复杂的情况下单纯的依靠基于接口的回调等方式不好处理，此时可以直接使用EventBus等，相对而言，EventBus由于是针对统一进程，用于处理此类需求非常适合，且轻松解耦。可以参见文件《Android各组件/控件间通信利器之EventBus》。
+
+> 第三、四、五情形：由于涉及不同进程间的消息通信，此时根据实际业务使用广播机制会显得非常适宜。下面主要针对Android广播中的具体知识点进行总结。

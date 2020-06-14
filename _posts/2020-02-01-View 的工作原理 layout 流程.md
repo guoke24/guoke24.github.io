@@ -9,22 +9,23 @@ catalog: true
 tags:
     - Android
     - 源码
-    - View 工作原理
     - View
 ---
 
 # 前言
 参考文章： 
-[凶残的程序员-View 的工作流程] ( https://blog.csdn.net/qian520ao/article/details/78657084 )
-[Android 源码分析 - View的measure、layout、draw三大流程] ( https://www.jianshu.com/p/aa3b1f9717b7 )
-[深入理解MeasureSpec] ( https://www.jianshu.com/p/a790982fd20e )
+[凶残的程序员-View 的工作流程]( https://blog.csdn.net/qian520ao/article/details/78657084 )
+
+[Android 源码分析 - View的measure、layout、draw三大流程]( https://www.jianshu.com/p/aa3b1f9717b7 )
+
+[深入理解MeasureSpec]( https://www.jianshu.com/p/a790982fd20e )
+
 本文章的源码，可以去该链接 [ Android9.0 - API28 ](https://www.androidos.net.cn/android/9.0.0_r8/xref)  直接搜索，浏览。
+
 或者 AndroidStudio 查看 sdk 中 /sdk/sources/android-28/android 路径下的源码也是一样的。
 
 # View的三大工作流程  
-由文章  [[View的工作流程的源头]]  可知，
 
----
 ActivityThread#handleResumeActivity 函数<br>
 创建 ViewRootImpl 实例，DecorView 实例的引用传递给其内部的 mView 变量，然后执行 ViewRootImpl#requestLayout 函数，开始 View 的工作流程。<br>
 requestLayout 函数，会触发 View 工作的三大流程：measure，layout，draw。<br>

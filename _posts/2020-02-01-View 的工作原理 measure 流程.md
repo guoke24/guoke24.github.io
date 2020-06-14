@@ -9,19 +9,23 @@ catalog: true
 tags:
     - Android
     - 源码
-    - View 工作原理
     - View
 ---
 
 # 前言
 参考文章：
-[凶残的程序员-View 的工作流程] ( https://blog.csdn.net/qian520ao/article/details/78657084 )
-[Android 源码分析 - View的measure、layout、draw三大流程] ( https://www.jianshu.com/p/aa3b1f9717b7 )
-[深入理解MeasureSpec] ( https://www.jianshu.com/p/a790982fd20e )
+[凶残的程序员-View 的工作流程]( https://blog.csdn.net/qian520ao/article/details/78657084 )
+
+[Android 源码分析 - View的measure、layout、draw三大流程]( https://www.jianshu.com/p/aa3b1f9717b7 )
+
+[深入理解MeasureSpec]( https://www.jianshu.com/p/a790982fd20e )
+
 本文章的源码，可以去该链接 [ Android9.0 - API28 ](https://www.androidos.net.cn/android/9.0.0_r8/xref)  直接搜索，浏览。
+
 或者 AndroidStudio 查看 sdk 中 /sdk/sources/android-28/android 路径下的源码也是一样的。
 
 # 背景知识
+
 Android 是一个操作系统，也是一个平台，对于 Android APP 开发者来说，Android 是一个大框架。Android OS 是一个运行在移动终端的操作系统，其触摸操作是人机交互中的一大特点，因而对于 APP 开发者来说，如何构建出优雅美观且人性化的UI界面是非常重要的一项技能。<br>
 
 想要学习如何做出一些好看的UI界面，对 View 的工作原理的了解是必不可少的。  
@@ -33,14 +37,15 @@ View 的工作原理，在网上看了很多讲解的文章，也看了很多源
 # 总览
 
 ## View 和 ViewGroup 的概念
+
 View 是一个视图，也是一个控件，它是展示某种类型内容的单体，是构成复杂界面的基本单位。View 可以是一个标签，一个输入框或一张图片等等。一个复杂界面，会有多个 View 构成，那么这个时候，就出现了分组归纳的需求，古人云，格物致知，那放到这里就是需要一个 View 的容器，以便将 View 分组，这个 View 的容器，就是 ViewGroup。ViewGroup 是 View 的子类，ViewGroup 可以容纳 View 和 ViewGroup。一个复杂界面，其中的多个 View 和 ViewGroup 会组成一个树形的结构体，根是一个 ViewGroup，最末端的枝叶，可以是 View，也可以是 ViewGroup。我们把这样的树形结构体，称为 ViewTree。 
 
 ## View 依赖的环境
+
 就像 Android OS 需要依赖硬件终端才能运行，ViewTree 也需要要放入特定的环境，才能工作，那就是 Activity 中的 PhoneWindow 实例，其内部变量 mDecor 会引用 ViewTree 的根 View，即 DecorView 实例。参考文章 [[Activity 的根View - DecorView]] 和 [[View的工作流程的源头]]，可知详细内容。 
 
 # View的三大工作流程
-由文章  [[View的工作流程的源头]]  可知，
----
+
 ActivityThread#handleResumeActivity 函数<br>
 创建 ViewRootImpl 实例，DecorView 实例的引用传递给其内部的 mView 变量，然后执行 ViewRootImpl#requestLayout 函数，开始 View 的工作流程。<br>
 requestLayout 函数，会触发 View 工作的三大流程：measure，layout，draw。<br>

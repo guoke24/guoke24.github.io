@@ -1,7 +1,7 @@
 ---
 layout:     post
 title:      "Handler 如何绑定 Thread 线程"
-subtitle:   ""
+subtitle:   "拒绝双重国籍（只能绑一个线程）"
 date:       2020-01-30 12:00:00
 author:     "GuoHao"
 header-img: "img/waittouse.jpg"
@@ -9,6 +9,7 @@ catalog: true
 tags:
     - Android
     - 源码
+    - 常用组件  
     - Handler
     - ThreadLocal
 ---
