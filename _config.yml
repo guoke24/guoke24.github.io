@@ -89,7 +89,7 @@ netease_comment: false
 
 # Sidebar settings
 sidebar: true                           # 侧边栏开关
-sidebar-about-description: "Step by step<br>不积跬步" # 侧边栏自我描述
+sidebar-about-description: "Step by step<br>积跬步而至千里" # 侧边栏自我描述
 sidebar-avatar: /img/avatar-guok-ny.jpg      # 侧边栏大头贴
 
 
